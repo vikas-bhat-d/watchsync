@@ -1,0 +1,56 @@
+{
+  "name": "syncwatch",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local-first synchronized movie night app",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "app": "electron .",
+    "server": "node server/index.js",
+    "build:win": "electron-builder --win nsis --x64",
+    "check": "node --check electron/config.js && node --check electron/main.js && node --check electron/preload.js && node --check renderer/app.js && node --check server/signaling.js && node --check server/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "electron-builder": "^26.18.0",
+    "electron": "^45.3.4"
+  },
+  "build": {
+    "appId": "com.syncwatch.desktop",
+    "productName": "SyncWatch",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "renderer/**/*",
+      "server/**/*",
+      "package.json",
+      "!electron/**/*.test.js",
+      "!server/**/*.test.js"
+    ],
+    "artifactName": "${productName}-Setup-${version}.${ext}",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

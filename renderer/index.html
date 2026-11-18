@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; media-src 'self' file: blob:; img-src 'self' data:; connect-src 'self'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SyncWatch</title>
+    <link rel="stylesheet" href="./watch-party.css" />
+    <script src="./app.js" defer></script>
+  </head>
+  <body data-mode="panel">
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="#" aria-label="SyncWatch home">
+          <span class="brand-mark" aria-hidden="true">SW</span>
+          <span class="brand-name">SyncWatch</span>
+        </a>
+        <div class="session-state" id="connection-state" role="status" aria-live="polite">
+          <span class="status-indicator" aria-hidden="true"></span>
+          <span id="connection-label">Not connected</span>
+        </div>
+        <div class="mode-switch" role="group" aria-label="Player layout">
+          <button class="mode-button" type="button" data-mode="theater" aria-pressed="false">Theater</button>
+          <button class="mode-button is-active" type="button" data-mode="panel" aria-pressed="true">Panel</button>
+        </div>
+      </header>
+
+      <main class="workspace" id="workspace">
+        <section class="player-column" aria-label="Video player">
+          <div class="media-heading">
+            <div class="media-copy">
+              <div class="media-kicker">
+                <p class="eyebrow">NOW PLAYING</p>
+                <span class="room-pill" id="room-pill" hidden></span>
+              </div>
+              <h1 id="media-title">Choose a local video to begin</h1>
+            </div>
+            <button class="button button-secondary" id="open-video" type="button" title="Open a local video">
+              <span aria-hidden="true">＋</span> Open file
+            </button>
+          </div>
+
+          <div class="player-frame" id="player-frame">
+            <video id="video" playsinline preload="metadata" hidden></video>
+            <div class="empty-state" id="empty-state">
+              <div class="empty-mark" aria-hidden="true">SW</div>
+              <p class="empty-title">A seat is waiting</p>
+              <p class="empty-copy">Choose your local copy of the video. Nothing is uploaded.</p>
+              <button class="button button-primary" id="open-empty" type="button">Choose video</button>
+            </div>
+            <p class="media-error" id="media-error" role="alert" hidden></p>
+            <div class="reaction-layer" id="reaction-layer" aria-live="off"></div>
+            <div class="player-status" id="playback-status">Ready when you are</div>
+          </div>
+
+          <section class="transport" aria-label="Playback controls">
+            <div class="seek-row">
+              <input class="seek-slider" id="seek" type="range" min="0" max="1000" value="0" aria-label="Video position" disabled />
+              <div class="time-labels" aria-live="off">
+                <span id="current-time">00:00:00</span>
+                <span id="duration">--:--:--</span>
+              </div>
+            </div>
+            <div class="control-row">
+              <div class="transport-buttons">
+                <button class="icon-button" id="backward" type="button" aria-label="Back 10 seconds" title="Back 10 seconds" disabled>−10</button>
+                <button class="button button-play" id="play-pause" type="button" aria-label="Play" title="Play" disabled>▶</button>
+                <button class="icon-button" id="forward" type="button" aria-label="Forward 10 seconds" title="Forward 10 seconds" disabled>+10</button>
+                <span class="transport-divider" aria-hidden="true"></span>
+                <span class="sync-readout" id="sync-readout">Local playback</span>
+              </div>
+              <div class="control-options">
+                <label class="control-select" title="Playback speed">
+                  <select id="speed" aria-label="Playback speed">
+                    <option value="0.5">0.5x</option>
+                    <option value="0.75">0.75x</option>
+                    <option value="1" selected>1x</option>
+                    <option value="1.25">1.25x</option>
+                    <option value="1.5">1.5x</option>
+                    <option value="1.75">1.75x</option>
+                    <option value="2">2x</option>
+                  </select>
+                </label>
+                <label class="volume-control" title="Local volume">
+                  <span aria-hidden="true">◖</span>
+                  <input id="volume" type="range" min="0" max="100" value="80" aria-label="Volume" />
+                </label>
+                <button class="button button-secondary sync-action" id="sync-action" type="button" disabled>Request sync</button>
+              </div>
+            </div>
+          </section>
+        </section>
+
+        <aside class="side-panel" aria-label="Watch party">
+          <nav class="quick-rail" aria-label="Quick actions">
+            <span class="rail-avatar" id="rail-avatar" aria-label="Not in a room">SW</span>
+            <button class="rail-button" id="rail-chat" type="button" aria-label="Open chat" title="Open chat">
+              <span aria-hidden="true">▤</span>
+              <span class="unread-badge" id="unread-badge" hidden>0</span>
+            </button>
+            <button class="rail-button rail-expand" id="rail-expand" type="button" aria-label="Open panel" title="Open panel">‹</button>
+          </nav>
+
+          <div class="panel-content">
+            <section class="room-panel" aria-labelledby="room-heading">
+              <div class="section-heading">
+                <div><p class="eyebrow">WATCH TOGETHER</p><h2 id="room-heading">Your room</h2></div>
+                <span class="room-state" id="room-state">Offline</span>
+              </div>
+              <div class="room-fields">
+                <label class="field-label" for="username">Your name</label>
+                <input id="username" type="text" maxlength="24" autocomplete="nickname" placeholder="Name" />
+                <label class="field-label" for="room-code">Room code</label>
+                <input id="room-code" type="text" maxlength="32" autocomplete="off" placeholder="movie-night-42" />
+              </div>
+              <div class="room-actions">
+                <button class="button button-primary" id="create-room" type="button">Create room</button>
+                <button class="button button-secondary" id="join-room" type="button">Join</button>
+                <button class="button button-secondary copy-room" id="copy-room" type="button" hidden>Copy code</button>
+                <button class="icon-button leave-button" id="leave-room" type="button" title="Leave room" aria-label="Leave room" hidden>×</button>
+              </div>
+              <p class="room-message" id="room-message" role="status">Create a room or enter a code to join.</p>
+            </section>
+
+            <section class="webcam-panel" aria-labelledby="webcam-heading">
+              <div class="section-heading compact-heading">
+                <div><p class="eyebrow">CAMERAS</p><h2 id="webcam-heading">Live video <span id="participant-count">0/4</span></h2></div>
+                <button class="icon-button pip-button" id="pip-webcam" type="button" title="Picture in picture" aria-label="Picture in picture">↗</button>
+              </div>
+              <div class="webcam-grid" id="webcam-grid">
+                <div class="video-tile local-tile" id="local-tile">
+                  <video id="local-camera" autoplay muted playsinline></video>
+                  <span class="video-placeholder" id="local-placeholder">You</span>
+                  <span class="video-name" id="local-name">You</span>
+                </div>
+                <div class="video-empty" id="remote-empty">Waiting for someone to join</div>
+              </div>
+              <div class="device-actions">
+                <button class="device-button" id="toggle-microphone" type="button" disabled title="Toggle microphone">Mic off</button>
+                <button class="device-button" id="toggle-camera" type="button" disabled title="Toggle camera">Camera off</button>
+              </div>
+            </section>
+
+            <section class="chat-panel" id="chat-panel" aria-labelledby="chat-heading">
+              <div class="section-heading compact-heading">
+                <div><p class="eyebrow">THE SIDE CONVERSATION</p><h2 id="chat-heading">Chat</h2></div>
+                <span class="chat-count" id="chat-count">0</span>
+              </div>
+              <div class="chat-messages" id="chat-messages" role="log" aria-live="polite" aria-relevant="additions"></div>
+              <div class="reaction-picker" aria-label="Send a reaction">
+                <button type="button" data-emoji="❤️" aria-label="Send heart reaction">❤️</button>
+                <button type="button" data-emoji="😂" aria-label="Send laughing reaction">😂</button>
+                <button type="button" data-emoji="👏" aria-label="Send applause reaction">👏</button>
+                <button type="button" data-emoji="😮" aria-label="Send surprised reaction">😮</button>
+                <button type="button" data-emoji="🔥" aria-label="Send fire reaction">🔥</button>
+                <button type="button" data-emoji="🎉" aria-label="Send celebration reaction">🎉</button>
+              </div>
+              <form class="chat-composer" id="chat-form">
+                <input id="chat-input" type="text" maxlength="500" autocomplete="off" placeholder="Message the room" aria-label="Chat message" disabled />
+                <button class="send-button" type="submit" aria-label="Send message" title="Send message" disabled>➤</button>
+              </form>
+            </section>
+          </div>
+        </aside>
+      </main>
+      <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    </div>
+  </body>
+</html>
