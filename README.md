@@ -8,7 +8,7 @@ SyncWatch is an Electron watch-party app. Each participant opens their own local
 - npm
 - Windows x64 to build the configured installer
 
-SyncWatch uses mpv when it is installed, giving access to its broad format and track support. The video appears in a separate mpv window while SyncWatch remains the control deck. If mpv is unavailable, the app falls back to Chromium's built-in decoder, whose supported formats depend on Electron's codecs.
+SyncWatch uses mpv when it is installed, giving access to its broad format and track support. On Windows, mpv's video is embedded inside the SyncWatch window; mpv remains an external executable, not an Electron add-on. If mpv is unavailable, the app falls back to Chromium's built-in decoder, whose supported formats depend on Electron's codecs. Native mpv embedding is currently Windows-only; on other platforms mpv may open in a separate window.
 
 On Windows, install a portable mpv build with:
 
@@ -28,7 +28,7 @@ npm exec -- install-electron
 npm start
 ```
 
-`npm exec -- install-electron` downloads Electron's runtime and is needed once after installing dependencies. `npm start` opens the desktop app and starts a local signaling server on `127.0.0.1:3000`. If another SyncWatch instance already owns that port, the new app reuses it. Videos open in mpv when found; otherwise they use the browser fallback.
+`npm exec -- install-electron` downloads Electron's runtime and is needed once after installing dependencies. `npm start` opens the desktop app and starts a local signaling server on `127.0.0.1:3000`. If another SyncWatch instance already owns that port, the new app reuses it. Videos use embedded mpv on Windows when found; otherwise they use the browser fallback.
 
 Run checks and signaling tests with:
 
@@ -111,7 +111,7 @@ Keep TURN credentials private. Room codes are the only access check currently; u
 
 1. Enter a display name and select **Create room**. Copy the room code and send it to the other participants.
 2. Other participants enter that code and select **Join**. Rooms allow up to four people.
-3. Everyone selects **Open file** and opens their own local copy of the same video. With mpv installed, its video window opens and SyncWatch controls playback. Video files are not uploaded or sent through the signaling server.
+3. Everyone selects **Open file** and opens their own local copy of the same video. On Windows, mpv renders inside the SyncWatch window and SyncWatch controls playback. Video files are not uploaded or sent through the signaling server.
 4. Anyone in the room can play, pause, seek, or change playback speed. The last action applies to everyone. Guests can select **Request sync**; the host can force-sync and set the room drift tolerance.
 5. Use the chat composer or reaction buttons to send messages and floating emoji reactions.
 6. Audio track, subtitles, aspect ratio, and volume are local to each participant and are not shared. Camera and microphone start off. Select **Camera on** or **Mic on** to request device access. Use the PiP button on a webcam tile for native picture-in-picture where available; otherwise it toggles a floating in-app tile.

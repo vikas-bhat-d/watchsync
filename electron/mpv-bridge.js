@@ -35,10 +35,11 @@ function resolveMpvExecutable() {
 }
 
 class MpvBridge extends EventEmitter {
-  constructor({ executable = resolveMpvExecutable(), showWindow = true } = {}) {
+  constructor({ executable = resolveMpvExecutable(), showWindow = true, windowId = null } = {}) {
     super();
     this.executable = executable;
     this.showWindow = showWindow;
+    this.windowId = windowId;
     this.ipcPath = process.platform === 'win32'
       ? String.raw`\\.\pipe\syncwatch-mpv-${process.pid}-${randomUUID()}`
       : path.join(os.tmpdir(), `syncwatch-mpv-${process.pid}-${randomUUID()}.sock`);
@@ -70,7 +71,10 @@ class MpvBridge extends EventEmitter {
       '--idle=yes',
       '--keep-open=yes',
       '--osc=no',
-      `--force-window=${this.showWindow ? 'yes' : 'no'}`,
+      '--media-controls=no',
+      '--input-cursor-passthrough=yes',
+      `--force-window=${this.showWindow || this.windowId ? 'yes' : 'no'}`,
+      ...(this.windowId ? [`--wid=${this.windowId}`] : []),
       `--input-ipc-server=${this.ipcPath}`,
       '--title=SyncWatch',
     ];
@@ -238,14 +242,22 @@ class MpvBridge extends EventEmitter {
 
   async stop() {
     if (!this.child) return;
+    const child = this.child;
     try {
       await this.command(['quit']);
     } catch {
-      this.child.kill();
+      child.kill();
     }
     this.socket?.destroy();
     this.socket = null;
     this.child = null;
+    if (child.exitCode === null) {
+      await Promise.race([
+        new Promise((resolve) => child.once('exit', resolve)),
+        new Promise((resolve) => setTimeout(resolve, 1000)),
+      ]);
+      if (child.exitCode === null) child.kill();
+    }
   }
 }
 

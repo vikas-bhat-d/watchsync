@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('syncwatch', {
   openSubtitle: () => ipcRenderer.invoke('subtitle:open'),
   mpvCommand: (action, value) => ipcRenderer.invoke('mpv:command', action, value),
   getMpvState: () => ipcRenderer.invoke('mpv:get-state'),
+  setMpvViewport: (bounds) => ipcRenderer.invoke('mpv:set-viewport', bounds),
   getConfig: () => ipcRenderer.invoke('app:get-config'),
   connect: (serverUrl) => ipcRenderer.invoke('room:connect', serverUrl),
   joinRoom: (payload) => ipcRenderer.invoke('room:join', payload),

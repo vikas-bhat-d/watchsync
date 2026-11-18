@@ -97,7 +97,7 @@ syncwatch/
 
 ## 5. mpv Integration
 
-mpv runs as a child process. Electron spawns it, communicates via a Unix socket (macOS/Linux) or named pipe (Windows).
+mpv runs as a child process and communicates with Electron over a named pipe on Windows or a Unix socket on macOS/Linux. On Windows, its video output is attached to a native child HWND hosted inside the Electron window; `--input-cursor-passthrough=yes` lets pointer events reach the SyncWatch controls. mpv is an external executable, not an Electron add-on. Native embedding on macOS/Linux is not implemented yet, so those platforms may show a separate mpv window.
 
 ### Spawning mpv
 

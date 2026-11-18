@@ -8,6 +8,7 @@ const { io } = require('socket.io-client');
 const { createSignalingServer } = require('../server/signaling');
 const { getSignalingServerUrl } = require('./config');
 const { MpvBridge } = require('./mpv-bridge');
+const { Win32VideoHost } = require('./win32-video-host');
 
 const roomEvents = [
   'connect', 'disconnect', 'connect_error', 'peer-joined', 'peer-left', 'host-changed',
@@ -26,11 +27,26 @@ let localSignalingServer;
 let signalingServerUrl;
 let mpvBridge;
 let activeEngine = 'browser';
+const videoHosts = new Map();
 
-function getMpvBridge() {
+function getVideoHost(window) {
+  if (process.platform !== 'win32') return null;
+  let host = videoHosts.get(window.id);
+  if (host) return host;
+
+  const nativeHandle = window.getNativeWindowHandle();
+  const parentHandle = nativeHandle.length >= 8
+    ? nativeHandle.readBigUInt64LE(0)
+    : BigInt(nativeHandle.readUInt32LE(0));
+  host = new Win32VideoHost(parentHandle);
+  videoHosts.set(window.id, host);
+  return host;
+}
+
+function getMpvBridge(windowId = null) {
   if (mpvBridge) return mpvBridge;
 
-  mpvBridge = new MpvBridge();
+  mpvBridge = new MpvBridge({ windowId, showWindow: !windowId });
   mpvBridge.on('property-change', (property) => {
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) window.webContents.send('mpv:event', property);
@@ -48,6 +64,13 @@ function getMpvBridge() {
   });
   mpvBridge.on('exit', (details) => {
     activeEngine = 'browser';
+    for (const host of videoHosts.values()) {
+      try {
+        host.setBounds({ x: 0, y: 0, width: 0, height: 0, visible: false });
+      } catch {
+        // The window may have been destroyed during shutdown.
+      }
+    }
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) window.webContents.send('mpv:event', { name: 'engine-exit', value: details });
     }
@@ -104,6 +127,18 @@ function createWindow() {
   });
 
   window.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  window.on('closed', () => {
+    const host = videoHosts.get(window.id);
+    videoHosts.delete(window.id);
+    if (mpvBridge) {
+      const player = mpvBridge;
+      mpvBridge = null;
+      activeEngine = 'browser';
+      player.stop().catch(() => {}).finally(() => host?.destroy());
+    } else {
+      host?.destroy();
+    }
+  });
 }
 
 ipcMain.handle('video:open', async (event) => {
@@ -125,7 +160,8 @@ ipcMain.handle('video:open', async (event) => {
   }
 
   const filePath = result.filePaths[0];
-  const player = getMpvBridge();
+  const videoHost = getVideoHost(window);
+  const player = getMpvBridge(videoHost?.mpvWindowId ?? null);
   try {
     await player.start();
     activeEngine = 'mpv';
@@ -135,6 +171,10 @@ ipcMain.handle('video:open', async (event) => {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
     activeEngine = 'browser';
+    if (mpvBridge === player) mpvBridge = null;
+    await player.stop().catch(() => {});
+    videoHost?.destroy();
+    videoHosts.delete(window.id);
   }
 
   return {
@@ -299,14 +339,18 @@ function configureMediaPermissions() {
 
 app.on('before-quit', (event) => {
   signalingSocket?.disconnect();
-  if (!localSignalingServer && !mpvBridge) return;
+  if (!localSignalingServer && !mpvBridge && videoHosts.size === 0) return;
 
   event.preventDefault();
   const server = localSignalingServer;
   localSignalingServer = undefined;
   const cleanup = [mpvBridge?.stop()];
   if (server) cleanup.push(server.close());
-  Promise.allSettled(cleanup).finally(() => app.quit());
+  Promise.allSettled(cleanup).finally(() => {
+    for (const host of videoHosts.values()) host.destroy();
+    videoHosts.clear();
+    app.quit();
+  });
 });
 
 ipcMain.handle('subtitle:open', async (event) => {
@@ -329,4 +373,18 @@ ipcMain.handle('subtitle:open', async (event) => {
     return { engine: 'mpv', name };
   }
   return { engine: 'browser', name, content: await readFile(filePath, 'utf8') };
+});
+
+ipcMain.handle('mpv:set-viewport', (event, bounds) => {
+  if (process.platform !== 'win32' || activeEngine !== 'mpv') return false;
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const host = window && videoHosts.get(window.id);
+  if (!host || !bounds || typeof bounds !== 'object') return false;
+
+  const { x, y, width, height, scaleFactor } = bounds;
+  if (![x, y, width, height].every(Number.isFinite) || width < 0 || height < 0 || width > 10000 || height > 10000) {
+    throw new Error('Invalid mpv viewport bounds.');
+  }
+  host.setBounds({ x, y, width, height, scaleFactor, visible: width > 0 && height > 0 });
+  return true;
 });

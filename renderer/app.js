@@ -33,6 +33,7 @@ let hostHeartbeatTimer;
 let driftCheckTimer;
 let toastTimer;
 let controlsHideTimer;
+let mpvViewportFrame = 0;
 let unreadMessages = 0;
 let lastHostState = null;
 const subtitleBlobUrls = [];
@@ -121,6 +122,26 @@ function updateTime() {
   if (Number.isFinite(duration) && duration > 0 && !seek.matches(':active')) {
     seek.value = String(Math.round((position / duration) * 1000));
   }
+}
+
+function updateMpvViewport() {
+  if (playerEngine !== 'mpv') return;
+  const bounds = playerFrame.getBoundingClientRect();
+  window.syncwatch.setMpvViewport({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    scaleFactor: window.devicePixelRatio || 1,
+  }).catch((error) => showToast(error.message));
+}
+
+function queueMpvViewportUpdate() {
+  if (mpvViewportFrame) cancelAnimationFrame(mpvViewportFrame);
+  mpvViewportFrame = requestAnimationFrame(() => {
+    mpvViewportFrame = 0;
+    updateMpvViewport();
+  });
 }
 
 function updateAudioTracks() {
@@ -405,6 +426,7 @@ async function openVideo() {
     updateAudioTracks();
     updateSubtitleTracks();
     updateTime();
+    queueMpvViewportUpdate();
   } catch (error) {
     byId('media-error').textContent = error instanceof Error ? error.message : 'The video could not be opened.';
     byId('media-error').hidden = false;
@@ -919,6 +941,7 @@ document.querySelectorAll('.mode-button').forEach((button) => {
       unreadMessages = 0;
       updateUnreadBadge();
     }
+    queueMpvViewportUpdate();
   });
 });
 
@@ -1125,6 +1148,9 @@ playerColumn.addEventListener('focusin', showPlaybackControls);
 playerColumn.addEventListener('focusout', (event) => {
   if (!playerColumn.contains(event.relatedTarget)) hidePlaybackControls();
 });
+
+new ResizeObserver(queueMpvViewportUpdate).observe(playerFrame);
+window.addEventListener('resize', queueMpvViewportUpdate);
 
 function showPlaybackControls() {
   if (document.body.dataset.mode !== 'theater') return;

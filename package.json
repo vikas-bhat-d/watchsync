@@ -9,11 +9,12 @@
     "app": "electron .",
     "server": "node server/index.js",
     "build:win": "electron-builder --win nsis --x64",
-    "check": "node --check electron/config.js && node --check electron/main.js && node --check electron/mpv-bridge.js && node --check electron/preload.js && node --check renderer/app.js && node --check server/signaling.js && node --check server/index.js",
+    "check": "node --check electron/config.js && node --check electron/main.js && node --check electron/mpv-bridge.js && node --check electron/preload.js && node --check electron/win32-video-host.js && node --check renderer/app.js && node --check server/signaling.js && node --check server/index.js",
     "test": "node --test"
   },
   "dependencies": {
     "express": "^5.1.0",
+    "koffi": "^3.3.8",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1"
   },
