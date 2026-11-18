@@ -342,6 +342,31 @@ h2 {
   font-size: 12px;
 }
 
+.mpv-status {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 420px;
+  padding: 22px;
+  text-align: center;
+}
+
+.mpv-badge {
+  display: grid;
+  min-width: 42px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid rgba(228, 187, 119, 0.34);
+  border-radius: 5px;
+  background: rgba(67, 51, 25, 0.55);
+  color: #f0d7a8;
+  font-size: 10px;
+  font-weight: 700;
+}
+
 .empty-title {
   margin: 0;
   font-size: 16px;
@@ -1089,5 +1114,126 @@ body[data-mode="theater"] .quick-rail .rail-button {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+.player-column {
+  position: relative;
+}
+
+.control-options {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.media-select select {
+  max-width: 104px;
+}
+
+.room-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-button {
+  width: 27px;
+  min-width: 27px;
+  height: 27px;
+  min-height: 27px;
+  color: #c5bfff;
+}
+
+.settings-dialog {
+  width: min(390px, calc(100vw - 32px));
+  padding: 21px;
+  border: 1px solid #3b4037;
+  border-radius: 8px;
+  background: #1a1d18;
+  color: var(--text);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.65);
+}
+
+.settings-dialog::backdrop {
+  background: rgba(3, 5, 3, 0.7);
+  backdrop-filter: blur(3px);
+}
+
+.dialog-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.dialog-heading .eyebrow {
+  margin-bottom: 5px;
+}
+
+.dialog-heading h2 {
+  font-size: 17px;
+}
+
+.settings-dialog .setting-label {
+  display: block;
+  margin-bottom: 9px;
+}
+
+.tolerance-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: 12px;
+}
+
+.tolerance-control input {
+  width: 100%;
+  accent-color: var(--violet);
+}
+
+.tolerance-control output {
+  color: #d3ccff;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dialog-note {
+  min-height: 32px;
+  margin: 11px 0 18px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+body[data-mode="theater"] .player-column .media-heading,
+body[data-mode="theater"] .player-column .transport {
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+body[data-mode="theater"] .player-column:not(.controls-visible) .media-heading,
+body[data-mode="theater"] .player-column:not(.controls-visible) .transport {
+  opacity: 0;
+  pointer-events: none;
+}
+
+body[data-mode="theater"] .player-column:not(.controls-visible) .transport {
+  transform: translateY(8px);
+}
+
+@media (max-width: 1050px) {
+  .control-row {
+    flex-wrap: wrap;
+  }
+
+  .control-options {
+    width: 100%;
+    justify-content: flex-end;
   }
 }

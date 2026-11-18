@@ -213,9 +213,11 @@ io.on('connection', (socket) => {
 This is the core. The rule is: **sync play, pause, seek, and playback speed.**
 Track selection, subtitles, volume, and display preferences remain local.
 
-### Who is host?
+### Who controls playback?
 
-The person who created the room is the host. Host's playback state is the source of truth.
+Every room member may play, pause, seek, or change speed. The last action is relayed to
+everyone and wins; the host remains responsible for periodic heartbeats, force-sync, and
+the room-wide drift-tolerance setting.
 
 ### On a local play/pause/seek/speed change
 
@@ -223,13 +225,13 @@ The person who created the room is the host. Host's playback state is the source
 // renderer/sync.js
 
 function onLocalEvent(type, payload) {
-  if (!iAmHost) return;  // host is authoritative for all shared playback state
+  if (!inRoom) return;
   socket.emit('sync-event', { roomId, type, payload });
 }
 ```
 
-> Non-hosts can still locally trigger pause/seek but it immediately snaps back.
-> This is a UX choice — simpler than a consensus model. Can revisit.
+There is no consensus or host lock on transport controls. The signaling server relays
+commands from every room member; only heartbeats and force-sync are host-only.
 
 ### On receiving a sync event
 
@@ -487,9 +489,9 @@ contextBridge.exposeInMainWorld('syncwatch', {
 
 ### Phase 1 — Local player (no networking)
 - [x] Electron app boots with a secure renderer
-- [x] Open local file and play supported formats with play/pause/seek controls
-- [ ] Replace the bootstrap browser player with mpv before considering Phase 1 complete
-- [ ] Audio track, subtitle, aspect ratio controls work
+- [x] Open local files through mpv JSON IPC when available, with browser fallback
+- [x] Audio track, subtitle track/file, volume, and aspect ratio controls stay local
+- [ ] Validate playback against representative formats and tracks on each supported OS
 - [x] Theater/Panel mode toggle works without document overflow
 
 ### Phase 2 — Signaling server
@@ -499,9 +501,9 @@ contextBridge.exposeInMainWorld('syncwatch', {
 
 ### Phase 3 — Sync
 - [x] Socket.IO client connected through the Electron preload boundary
-- [x] Host-only sync events: play, pause, seek, playback speed
+- [x] Any room member can play, pause, seek, or change playback speed
 - [x] Heartbeat + drift correction
-- [x] Force sync restores position, playing/paused state, and playback speed
+- [x] Host heartbeat and force-sync restore position, playing/paused state, and playback speed
 
 ### Phase 4 — Chat
 - [x] Chat UI in sidebar
@@ -521,35 +523,23 @@ contextBridge.exposeInMainWorld('syncwatch', {
 - [x] Toast notifications for room and sync events
 
 ### Implementation sequence
-1. **[x] Electron shell and local player UI** — secure preload boundary, file picker, local browser playback controls, and responsive theater/panel layouts. The browser player does not meet the full-format requirement.
-2. **[x] Watch-party features** — room signaling, host-authoritative playback and speed sync, chat, WebRTC devices, floating reactions, and webcam picture-in-picture.
-3. **Next: mpv playback adapter** — launch mpv, connect over IPC, and move file loading, transport, speed, volume, and playback state behind the player bridge.
-4. **Complete local controls** — track selection, subtitles, aspect ratio, subtitle adjustments, and validation against representative formats.
-5. **Deployment and release** — Windows x64 NSIS installer configured and built; deploy signaling, validate cross-device WebRTC with TURN, and package macOS/Linux builds.
+1. **[x] Electron shell and local player UI** — secure preload boundary, file picker, responsive theater/panel layouts, and browser fallback.
+2. **[x] Watch-party features** — room signaling, shared transport and speed, host drift settings, chat, WebRTC devices, reactions, and webcam picture-in-picture.
+3. **[x] mpv playback adapter** — launch mpv, connect over JSON IPC, and control playback/track properties; the native mpv video window is separate from the SyncWatch control window.
+4. **[x] Local media controls** — audio/subtitle tracks, external subtitles, aspect ratio, and local volume.
+5. **Validation and release** — test representative formats and cross-device WebRTC, deploy signaling, and package macOS/Linux builds.
 
-Steps 1 and 2 are implemented. Windows installer output is `dist/SyncWatch-Setup-0.1.0.exe`. The next required build step is **mpv playback**; public signaling deployment and macOS/Linux packaging remain pending.
+Steps 1–4 are implemented. The mpv IPC bridge is tested; representative file playback and cross-device WebRTC still need validation. Windows installer output is `dist/SyncWatch-Setup-0.1.0.exe`; public signaling deployment and macOS/Linux packaging remain pending.
 
 ---
 
 ## 13. mpv Installation Note
 
-mpv must be installed on each user's machine separately. The Electron app checks on startup:
-
-```js
-// electron/main.js
-const { execSync } = require('child_process');
-try {
-  execSync('mpv --version');
-} catch {
-  dialog.showErrorBox(
-    'mpv not found',
-    'Please install mpv: https://mpv.io/installation/'
-  );
-  app.quit();
-}
-```
-
-Alternatively, bundle the mpv binary inside the Electron app (larger build, but zero setup for users). Platform-specific binaries: `mpv-win.exe`, `mpv-mac`, `mpv-linux`.
+mpv is optional but recommended for broad format and track support. SyncWatch looks for
+`MPV_PATH`, an app-bundled `resources/mpv` binary, the Windows WinGet link, or `mpv` on
+`PATH`; if none is found, it falls back to Chromium's supported formats. The current
+Windows installer does not bundle mpv. On Windows, a portable build can be installed with
+`winget install --id mpv-player.mpv-CI.MSVC --exact`.
 
 ---
 
@@ -565,6 +555,8 @@ Alternatively, bundle the mpv binary inside the Electron app (larger build, but 
 | Zoom/pan | Local screen difference |
 
 Synced playback state: **play, pause, seek timestamp, playback speed.**
+The drift-tolerance threshold is a shared room setting controlled by the host. Audio track,
+subtitle track/file, subtitle presentation, aspect ratio, and volume stay local to each viewer.
 
 ---
 

@@ -4,6 +4,7 @@ const { Server } = require('socket.io');
 
 const MAX_ROOM_SIZE = 4;
 const MAX_MESSAGE_LENGTH = 500;
+const DEFAULT_DRIFT_TOLERANCE = 3;
 const REACTIONS = new Set(['❤️', '😂', '👏', '😮', '🔥', '😭', '🎉']);
 const SYNC_TYPES = new Set(['play', 'pause', 'seek', 'speed', 'heartbeat', 'force-sync']);
 
@@ -118,7 +119,12 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
       }
 
       if (!room) {
-        room = { hostId: null, members: new Map(), playbackState: null };
+        room = {
+          hostId: null,
+          members: new Map(),
+          playbackState: null,
+          driftTolerance: DEFAULT_DRIFT_TOLERANCE,
+        };
         rooms.set(roomId, room);
       }
 
@@ -137,6 +143,7 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
         isHost: room.hostId === socket.id,
         peers,
         playbackState: room.playbackState,
+        settings: { driftTolerance: room.driftTolerance },
       });
       socket.to(roomId).emit('peer-joined', { id: socket.id, username });
     });
@@ -149,7 +156,11 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
     socket.on('sync-event', ({ type, payload } = {}) => {
       const roomId = socket.data.roomId;
       const room = roomId && rooms.get(roomId);
-      if (!room || room.hostId !== socket.id || !SYNC_TYPES.has(type)) {
+      const isHostOnlyEvent = type === 'heartbeat' || type === 'force-sync';
+      if (
+        !room || !room.members.has(socket.id) || !SYNC_TYPES.has(type) ||
+        (isHostOnlyEvent && room.hostId !== socket.id)
+      ) {
         return;
       }
 
@@ -187,6 +198,24 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
       io.to(room.hostId).emit('sync-request', {
         from: socket.id,
         username: socket.data.username,
+      });
+    });
+
+    socket.on('sync-settings', (payload = {}) => {
+      const roomId = socket.data.roomId;
+      const room = roomId && rooms.get(roomId);
+      const driftTolerance = Number(payload.driftTolerance);
+      if (
+        !room || room.hostId !== socket.id ||
+        !Number.isFinite(driftTolerance) || driftTolerance < 0.2 || driftTolerance > 5
+      ) {
+        return;
+      }
+
+      room.driftTolerance = Math.round(driftTolerance * 10) / 10;
+      io.to(roomId).emit('sync-settings', {
+        driftTolerance: room.driftTolerance,
+        from: socket.id,
       });
     });
 

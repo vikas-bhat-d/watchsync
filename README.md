@@ -1,6 +1,6 @@
 # SyncWatch
 
-SyncWatch is an Electron watch-party app. Each participant opens their own local copy of the same video. The room host controls shared play, pause, seek, and playback speed; participants can also chat, send floating reactions, and share webcam/microphone video peer-to-peer.
+SyncWatch is an Electron watch-party app. Each participant opens their own local copy of the same video. Everyone can play, pause, seek, and change shared playback speed; the host configures the room-wide drift tolerance. Participants can also chat, send floating reactions, and share webcam/microphone video peer-to-peer.
 
 ## Requirements
 
@@ -8,7 +8,15 @@ SyncWatch is an Electron watch-party app. Each participant opens their own local
 - npm
 - Windows x64 to build the configured installer
 
-The current player uses Chromium's built-in decoder, so supported formats depend on Electron's codecs. Full-format mpv playback is not implemented yet.
+SyncWatch uses mpv when it is installed, giving access to its broad format and track support. The video appears in a separate mpv window while SyncWatch remains the control deck. If mpv is unavailable, the app falls back to Chromium's built-in decoder, whose supported formats depend on Electron's codecs.
+
+On Windows, install a portable mpv build with:
+
+```powershell
+winget install --id mpv-player.mpv-CI.MSVC --exact
+```
+
+Restart the terminal/app after installation. If mpv is not on `PATH`, set `MPV_PATH` to the full path of `mpv.exe` before launching SyncWatch.
 
 ## Run from Source
 
@@ -20,7 +28,7 @@ npm exec -- install-electron
 npm start
 ```
 
-`npm exec -- install-electron` downloads Electron's runtime and is needed once after installing dependencies. `npm start` opens the desktop app and starts a local signaling server on `127.0.0.1:3000`. If another SyncWatch instance already owns that port, the new app reuses it.
+`npm exec -- install-electron` downloads Electron's runtime and is needed once after installing dependencies. `npm start` opens the desktop app and starts a local signaling server on `127.0.0.1:3000`. If another SyncWatch instance already owns that port, the new app reuses it. Videos open in mpv when found; otherwise they use the browser fallback.
 
 Run checks and signaling tests with:
 
@@ -45,7 +53,7 @@ The installer is written to:
 dist\SyncWatch-Setup-0.1.0.exe
 ```
 
-The unpacked executable used by the installer is `dist\win-unpacked\SyncWatch.exe`. The installer is currently unsigned, so Windows may show its standard unknown-publisher warning. `npm start` runs from source; `npm run build:win` creates the installable `.exe`.
+The unpacked executable used by the installer is `dist\win-unpacked\SyncWatch.exe`. The installer is currently unsigned, so Windows may show its standard unknown-publisher warning. mpv is not bundled; install it separately or set `MPV_PATH`. `npm start` runs from source; `npm run build:win` creates the installable `.exe`.
 
 ## Configure the Signaling Server
 
@@ -103,10 +111,10 @@ Keep TURN credentials private. Room codes are the only access check currently; u
 
 1. Enter a display name and select **Create room**. Copy the room code and send it to the other participants.
 2. Other participants enter that code and select **Join**. Rooms allow up to four people.
-3. Everyone selects **Open file** and opens their own local copy of the same video. Video files are not uploaded or sent through the signaling server.
-4. The host controls play, pause, seeking, and speed. Guests follow those controls and can select **Request sync** if they drift. Volume is local to each participant.
+3. Everyone selects **Open file** and opens their own local copy of the same video. With mpv installed, its video window opens and SyncWatch controls playback. Video files are not uploaded or sent through the signaling server.
+4. Anyone in the room can play, pause, seek, or change playback speed. The last action applies to everyone. Guests can select **Request sync**; the host can force-sync and set the room drift tolerance.
 5. Use the chat composer or reaction buttons to send messages and floating emoji reactions.
-6. Camera and microphone start off. Select **Camera on** or **Mic on** to request device access. Use the PiP button on a webcam tile for native picture-in-picture where available; otherwise it toggles a floating in-app tile.
+6. Audio track, subtitles, aspect ratio, and volume are local to each participant and are not shared. Camera and microphone start off. Select **Camera on** or **Mic on** to request device access. Use the PiP button on a webcam tile for native picture-in-picture where available; otherwise it toggles a floating in-app tile.
 7. Select **Leave room** to disconnect. Theater mode narrows the sidebar to quick actions; Panel mode shows room, video, and chat controls.
 
 ## Configuration Reference
@@ -121,5 +129,6 @@ Keep TURN credentials private. Room codes are the only access check currently; u
 | `SYNCWATCH_TURN_URL` | Optional TURN URL | Unset |
 | `SYNCWATCH_TURN_USERNAME` | Optional TURN username | Unset |
 | `SYNCWATCH_TURN_CREDENTIAL` | Optional TURN credential | Unset |
+| `MPV_PATH` | Optional full path to `mpv.exe`/`mpv` when it is not on `PATH` | Search `PATH` |
 
 The Electron main process and secure IPC bridge are in `electron/`; the UI is in `renderer/`; the Socket.IO service is in `server/`.

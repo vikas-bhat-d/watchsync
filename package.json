@@ -9,7 +9,7 @@
     "app": "electron .",
     "server": "node server/index.js",
     "build:win": "electron-builder --win nsis --x64",
-    "check": "node --check electron/config.js && node --check electron/main.js && node --check electron/preload.js && node --check renderer/app.js && node --check server/signaling.js && node --check server/index.js",
+    "check": "node --check electron/config.js && node --check electron/main.js && node --check electron/mpv-bridge.js && node --check electron/preload.js && node --check renderer/app.js && node --check server/signaling.js && node --check server/index.js",
     "test": "node --test"
   },
   "dependencies": {

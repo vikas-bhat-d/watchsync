@@ -1,4 +1,5 @@
 const { mkdirSync } = require('node:fs');
+const { readFile, stat } = require('node:fs/promises');
 const path = require('node:path');
 const { tmpdir } = require('node:os');
 const { pathToFileURL } = require('node:url');
@@ -6,15 +7,16 @@ const { app, BrowserWindow, dialog, ipcMain, session } = require('electron');
 const { io } = require('socket.io-client');
 const { createSignalingServer } = require('../server/signaling');
 const { getSignalingServerUrl } = require('./config');
+const { MpvBridge } = require('./mpv-bridge');
 
 const roomEvents = [
   'connect', 'disconnect', 'connect_error', 'peer-joined', 'peer-left', 'host-changed',
   'sync-event', 'sync-request', 'chat-message', 'reaction', 'webrtc-offer',
-  'webrtc-answer', 'webrtc-ice',
+  'webrtc-answer', 'webrtc-ice', 'sync-settings',
 ];
 const outgoingEvents = new Set([
   'sync-event', 'request-sync', 'chat-message', 'reaction',
-  'webrtc-offer', 'webrtc-answer', 'webrtc-ice',
+  'webrtc-offer', 'webrtc-answer', 'webrtc-ice', 'sync-settings',
 ]);
 const sessionDataPath = path.join(tmpdir(), `syncwatch-session-${process.pid}`);
 mkdirSync(sessionDataPath, { recursive: true });
@@ -22,6 +24,36 @@ app.setPath('sessionData', sessionDataPath);
 let signalingSocket;
 let localSignalingServer;
 let signalingServerUrl;
+let mpvBridge;
+let activeEngine = 'browser';
+
+function getMpvBridge() {
+  if (mpvBridge) return mpvBridge;
+
+  mpvBridge = new MpvBridge();
+  mpvBridge.on('property-change', (property) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send('mpv:event', property);
+    }
+  });
+  mpvBridge.on('file-loaded', () => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send('mpv:event', { name: 'file-loaded', value: true });
+    }
+  });
+  mpvBridge.on('end-file', (reason) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send('mpv:event', { name: 'end-file', value: reason });
+    }
+  });
+  mpvBridge.on('exit', (details) => {
+    activeEngine = 'browser';
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send('mpv:event', { name: 'engine-exit', value: details });
+    }
+  });
+  return mpvBridge;
+}
 
 async function startLocalSignalingServer() {
   const configuredUrl = getSignalingServerUrl();
@@ -93,7 +125,21 @@ ipcMain.handle('video:open', async (event) => {
   }
 
   const filePath = result.filePaths[0];
+  const player = getMpvBridge();
+  try {
+    await player.start();
+    activeEngine = 'mpv';
+    await player.loadFile(filePath);
+    await player.setProperty('force-media-title', path.basename(filePath)).catch(() => undefined);
+    return { engine: 'mpv', name: path.basename(filePath) };
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    activeEngine = 'browser';
+  }
+
   return {
+    engine: 'browser',
+    mpvUnavailable: true,
     name: path.basename(filePath),
     url: pathToFileURL(filePath).href,
   };
@@ -122,6 +168,7 @@ app.on('window-all-closed', () => {
 
 ipcMain.handle('app:get-config', () => ({
   signalingServerUrl,
+  mpvPath: process.env.MPV_PATH ?? null,
   iceServers: [
     { urls: 'stun:stun.cloudflare.com:3478' },
     ...(process.env.SYNCWATCH_TURN_URL ? [{
@@ -131,6 +178,49 @@ ipcMain.handle('app:get-config', () => ({
     }] : []),
   ],
 }));
+
+ipcMain.handle('mpv:get-state', async () => {
+  if (activeEngine !== 'mpv' || !mpvBridge?.socket?.writable) return null;
+  const properties = ['time-pos', 'duration', 'pause', 'speed', 'volume', 'mute', 'track-list'];
+  const values = await Promise.all(properties.map(async (property) => {
+    try {
+      return await mpvBridge.getProperty(property);
+    } catch {
+      return null;
+    }
+  }));
+  return Object.fromEntries(properties.map((property, index) => [property, values[index]]));
+});
+
+ipcMain.handle('mpv:command', async (_event, action, value) => {
+  if (activeEngine !== 'mpv' || !mpvBridge?.socket?.writable) {
+    throw new Error('mpv is not playing a file.');
+  }
+
+  if (action === 'refresh-tracks') return mpvBridge.getProperty('track-list');
+  if (action === 'play') return mpvBridge.setProperty('pause', false);
+  if (action === 'pause') return mpvBridge.setProperty('pause', true);
+  if (action === 'seek' && Number.isFinite(value) && value >= 0) return mpvBridge.seek(value);
+  if (action === 'speed' && Number.isFinite(value) && value >= 0.25 && value <= 3) {
+    return mpvBridge.setProperty('speed', value);
+  }
+  if (action === 'volume' && Number.isFinite(value) && value >= 0 && value <= 100) {
+    return mpvBridge.setProperty('volume', value);
+  }
+  if (action === 'mute' && typeof value === 'boolean') return mpvBridge.setProperty('mute', value);
+  if (action === 'audio-track' && (value === 'auto' || Number.isInteger(value))) {
+    return mpvBridge.setProperty('aid', value === 'auto' ? 'auto' : value);
+  }
+  if (action === 'subtitle-track' && (value === 'off' || Number.isInteger(value))) {
+    return mpvBridge.setProperty('sid', value === 'off' ? 'no' : value);
+  }
+  if (action === 'aspect' && (value === 'auto' || value === 'fill' || Number.isFinite(value))) {
+    await mpvBridge.setProperty('keepaspect', value !== 'fill');
+    return mpvBridge.setProperty('video-aspect-override', value === 'auto' || value === 'fill' ? -1 : value);
+  }
+
+  throw new Error('Unsupported or invalid mpv command.');
+});
 
 ipcMain.handle('room:connect', async (_event, serverUrl) => {
   if (typeof serverUrl !== 'string' || !/^https?:\/\//.test(serverUrl)) {
@@ -209,10 +299,34 @@ function configureMediaPermissions() {
 
 app.on('before-quit', (event) => {
   signalingSocket?.disconnect();
-  if (!localSignalingServer) return;
+  if (!localSignalingServer && !mpvBridge) return;
 
   event.preventDefault();
   const server = localSignalingServer;
   localSignalingServer = undefined;
-  server.close().finally(() => app.quit());
+  const cleanup = [mpvBridge?.stop()];
+  if (server) cleanup.push(server.close());
+  Promise.allSettled(cleanup).finally(() => app.quit());
+});
+
+ipcMain.handle('subtitle:open', async (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showOpenDialog(window, {
+    title: 'Open subtitles',
+    properties: ['openFile'],
+    filters: [{ name: 'Subtitle files', extensions: ['srt', 'vtt'] }],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+
+  const filePath = result.filePaths[0];
+  const fileInfo = await stat(filePath);
+  if (fileInfo.size > 5 * 1024 * 1024) {
+    throw new Error('Subtitle files must be smaller than 5 MB.');
+  }
+  const name = path.basename(filePath);
+  if (activeEngine === 'mpv') {
+    await getMpvBridge().addSubtitle(filePath);
+    return { engine: 'mpv', name };
+  }
+  return { engine: 'browser', name, content: await readFile(filePath, 'utf8') };
 });

@@ -34,7 +34,7 @@ function join(client, roomId, username) {
   });
 }
 
-test('room host relays playback and speed, while guest sync commands are ignored', async (t) => {
+test('all members can control playback while heartbeat and force-sync remain host-only', async (t) => {
   const { connect, server } = await setup(t);
   const host = await connect();
   const guest = await connect();
@@ -50,13 +50,40 @@ test('room host relays playback and speed, while guest sync commands are ignored
   host.emit('sync-event', { type: 'speed', payload: { speed: 1.5 } });
   assert.deepEqual((await speedEvent)[0].payload, { speed: 1.5 });
 
-  guest.emit('sync-event', { type: 'pause', payload: {} });
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  const guestPlaybackEvent = once(host, 'sync-event');
+  guest.emit('sync-event', { type: 'play', payload: {} });
+  const [relayedEvent] = await guestPlaybackEvent;
+  assert.equal(relayedEvent.type, 'play');
+  assert.equal(relayedEvent.from, guest.id);
   assert.deepEqual(server.rooms.get('movie-night-42').playbackState, {
     seconds: 0,
-    playing: false,
+    playing: true,
     speed: 1.5,
   });
+
+  const seekRelay = once(host, 'sync-event');
+  guest.emit('sync-event', { type: 'seek', payload: { seconds: 83 } });
+  assert.deepEqual((await seekRelay)[0].payload, { seconds: 83 });
+
+  const speedRelay = once(host, 'sync-event');
+  guest.emit('sync-event', { type: 'speed', payload: { speed: 1.25 } });
+  assert.deepEqual((await speedRelay)[0].payload, { speed: 1.25 });
+
+  const pauseRelay = once(host, 'sync-event');
+  guest.emit('sync-event', { type: 'pause', payload: {} });
+  assert.equal((await pauseRelay)[0].type, 'pause');
+  assert.deepEqual(server.rooms.get('movie-night-42').playbackState, {
+    seconds: 83,
+    playing: false,
+    speed: 1.25,
+  });
+
+  guest.emit('sync-event', {
+    type: 'heartbeat',
+    payload: { seconds: 900, playing: true, speed: 3 },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(server.rooms.get('movie-night-42').playbackState.seconds, 83);
   const state = once(guest, 'sync-event');
   host.emit('sync-event', {
     type: 'heartbeat',
@@ -118,4 +145,22 @@ test('leaving acknowledges and transfers host to a remaining participant', async
   const leaveResult = await host.timeout(1000).emitWithAck('leave-room', null);
   assert.deepEqual(leaveResult, { ok: true });
   assert.deepEqual((await hostChanged)[0], { hostId: guest.id });
+});
+
+test('host can configure room drift tolerance and guests cannot overwrite it', async (t) => {
+  const { connect, server } = await setup(t);
+  const host = await connect();
+  const guest = await connect();
+  await join(host, 'settings-room', 'Host');
+  const guestRoom = await join(guest, 'settings-room', 'Guest');
+  assert.equal(guestRoom.settings.driftTolerance, 3);
+
+  const guestUpdate = once(guest, 'sync-settings');
+  host.emit('sync-settings', { driftTolerance: 1.4 });
+  assert.equal((await guestUpdate)[0].driftTolerance, 1.4);
+  assert.equal(server.rooms.get('settings-room').driftTolerance, 1.4);
+
+  guest.emit('sync-settings', { driftTolerance: 4.5 });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(server.rooms.get('settings-room').driftTolerance, 1.4);
 });
