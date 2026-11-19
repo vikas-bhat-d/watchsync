@@ -8,8 +8,8 @@
     "start": "electron .",
     "app": "electron .",
     "server": "node server/index.js",
-    "build:win": "electron-builder --win nsis --x64",
-    "check": "node --check electron/config.js && node --check electron/main.js && node --check electron/mpv-bridge.js && node --check electron/preload.js && node --check electron/win32-video-host.js && node --check renderer/app.js && node --check server/signaling.js && node --check server/index.js",
+    "build:win": "node scripts/build-win.js",
+    "check": "node --check electron/config.js && node --check electron/main.js && node --check electron/mpv-bridge.js && node --check electron/preload.js && node --check electron/win32-video-host.js && node --check renderer/app.js && node --check server/signaling.js && node --check server/index.js && node --check scripts/build-win.js",
     "test": "node --test"
   },
   "dependencies": {
@@ -36,6 +36,13 @@
       "package.json",
       "!electron/**/*.test.js",
       "!server/**/*.test.js"
+    ],
+    "extraResources": [
+      {
+        "from": "dist/mpv-runtime",
+        "to": "mpv",
+        "filter": ["**/*"]
+      }
     ],
     "artifactName": "${productName}-Setup-${version}.${ext}",
     "win": {

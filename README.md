@@ -8,9 +8,9 @@ SyncWatch is an Electron watch-party app. Each participant opens their own local
 - npm
 - Windows x64 to build the configured installer
 
-SyncWatch uses mpv when it is installed, giving access to its broad format and track support. On Windows, mpv's video is embedded inside the SyncWatch window; mpv remains an external executable, not an Electron add-on. If mpv is unavailable, the app falls back to Chromium's built-in decoder, whose supported formats depend on Electron's codecs. Native mpv embedding is currently Windows-only; on other platforms mpv may open in a separate window.
+SyncWatch uses mpv for broad format and track support. The Windows installer bundles mpv, so users do not need to install it separately. When running from source, mpv is optional; if it is unavailable, the app falls back to Chromium's built-in decoder, whose supported formats depend on Electron's codecs. Native mpv embedding is currently Windows-only; on other platforms mpv may open in a separate window.
 
-On Windows, install a portable mpv build with:
+When running from source on Windows, install a portable mpv build with:
 
 ```powershell
 winget install --id mpv-player.mpv-CI.MSVC --exact
@@ -39,7 +39,7 @@ npm test
 
 ## Build the Windows Installer
 
-On Windows x64, run:
+On Windows x64, ensure a Windows x64 mpv build is installed on the build machine or set `MPV_PATH` to its `mpv.exe`, then run:
 
 ```powershell
 npm ci
@@ -47,13 +47,13 @@ npm exec -- install-electron
 npm run build:win
 ```
 
-The installer is written to:
+Each build uses a fresh output directory so a running app from an earlier build cannot lock the next build's `app.asar`. The installer is written under a unique directory like:
 
 ```text
-dist\SyncWatch-Setup-0.1.0.exe
+dist\win-build-<build-id>\SyncWatch-Setup-0.1.0.exe
 ```
 
-The unpacked executable used by the installer is `dist\win-unpacked\SyncWatch.exe`. The installer is currently unsigned, so Windows may show its standard unknown-publisher warning. mpv is not bundled; install it separately or set `MPV_PATH`. `npm start` runs from source; `npm run build:win` creates the installable `.exe`.
+The unpacked executable is in the same build directory under `win-unpacked`. The build stages `mpv.exe` and its neighboring DLLs into the installer; users do not need a separate mpv installation. The installer is currently unsigned, so Windows may show its standard unknown-publisher warning. `npm start` runs from source; `npm run build:win` creates the installable `.exe`.
 
 ## Configure the Signaling Server
 
@@ -129,6 +129,6 @@ Keep TURN credentials private. Room codes are the only access check currently; u
 | `SYNCWATCH_TURN_URL` | Optional TURN URL | Unset |
 | `SYNCWATCH_TURN_USERNAME` | Optional TURN username | Unset |
 | `SYNCWATCH_TURN_CREDENTIAL` | Optional TURN credential | Unset |
-| `MPV_PATH` | Optional full path to `mpv.exe`/`mpv` when it is not on `PATH` | Search `PATH` |
+| `MPV_PATH` | Optional full path to `mpv.exe`/`mpv`; also used as the build-time source for the bundled Windows mpv | Search `PATH` |
 
 The Electron main process and secure IPC bridge are in `electron/`; the UI is in `renderer/`; the Socket.IO service is in `server/`.

@@ -943,7 +943,7 @@ function handleRoomEvent(event, payload) {
   } else if (event === 'disconnect') {
     setConnectionLabel('Connection lost', 'error');
   } else if (event === 'connect_error') {
-    setConnectionLabel('Server unavailable', 'error');
+    setConnectionLabel('Reconnecting to server...', 'error');
   } else if (event === 'peer-joined') {
     displayNames.set(payload.id, payload.username);
     createPeerConnection(payload.id, payload.username);

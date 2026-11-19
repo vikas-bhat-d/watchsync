@@ -5,7 +5,12 @@ const { io: createClient } = require('socket.io-client');
 const { createSignalingServer } = require('./signaling');
 
 async function setup(t) {
-  const server = createSignalingServer({ host: '127.0.0.1', port: 0 });
+  const logs = [];
+  const logger = Object.fromEntries(['info', 'warn', 'error'].map((level) => [
+    level,
+    (line) => logs.push(JSON.parse(line)),
+  ]));
+  const server = createSignalingServer({ host: '127.0.0.1', port: 0, logger });
   const address = await server.listen();
   const clients = [];
   t.after(async () => {
@@ -16,6 +21,7 @@ async function setup(t) {
   return {
     server,
     clients,
+    logs,
     connect: async () => {
       const client = createClient(`http://127.0.0.1:${address.port}`, {
         transports: ['websocket'],
@@ -109,6 +115,25 @@ test('chat messages are relayed with server-assigned identity and trimmed text',
   const [data] = await message;
   assert.equal(data.username, 'Guest');
   assert.equal(data.text, 'hello room');
+});
+
+test('server logs useful room activity without room codes, usernames, or chat contents', async (t) => {
+  const { connect, logs } = await setup(t);
+  const client = await connect();
+  await join(client, 'private-room-42', 'Private User');
+
+  const chatReceived = once(client, 'chat-message');
+  client.emit('chat-message', { text: 'do not write this to logs' });
+  await chatReceived;
+
+  await client.timeout(1000).emitWithAck('leave-room', null);
+
+  const events = logs.map((entry) => entry.event);
+  assert.ok(events.includes('client.connected'));
+  assert.ok(events.includes('room.member_joined'));
+  assert.ok(events.includes('room.chat_message'));
+  assert.ok(events.includes('room.member_left'));
+  assert.doesNotMatch(JSON.stringify(logs), /private-room-42|Private User|do not write this to logs/);
 });
 
 test('WebRTC signaling is relayed only to a room member', async (t) => {

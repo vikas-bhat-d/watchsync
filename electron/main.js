@@ -21,6 +21,7 @@ const outgoingEvents = new Set([
   'webrtc-offer', 'webrtc-answer', 'webrtc-ice', 'sync-settings',
 ]);
 const reactionEmojis = new Set(['❤️', '😂', '👏', '😮', '🔥', '😭', '🎉']);
+const SIGNALING_CONNECT_TIMEOUT_MS = 75000;
 const sessionDataPath = path.join(tmpdir(), `syncwatch-session-${process.pid}`);
 mkdirSync(sessionDataPath, { recursive: true });
 app.setPath('sessionData', sessionDataPath);
@@ -310,9 +311,21 @@ ipcMain.handle('room:connect', async (_event, serverUrl) => {
   }
 
   signalingSocket?.disconnect();
-  signalingSocket = io(serverUrl, { autoConnect: false, timeout: 8000 });
+  signalingSocket = io(serverUrl, {
+    autoConnect: false,
+    timeout: 20000,
+    reconnection: true,
+    reconnectionAttempts: 3,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
+  });
   for (const eventName of roomEvents) {
     signalingSocket.on(eventName, (...args) => {
+      if (eventName === 'connect_error') {
+        console.warn('[syncwatch] signaling connection attempt failed:', args[0]?.message ?? args[0]);
+      } else if (eventName === 'disconnect') {
+        console.warn('[syncwatch] signaling connection lost:', args[0]);
+      }
       for (const window of BrowserWindow.getAllWindows()) {
         if (!window.isDestroyed()) {
           window.webContents.send('room:event', { event: eventName, args });
@@ -322,13 +335,35 @@ ipcMain.handle('room:connect', async (_event, serverUrl) => {
   }
 
   await new Promise((resolve, reject) => {
-    signalingSocket.once('connect', resolve);
-    signalingSocket.once('connect_error', reject);
-    signalingSocket.connect();
+    const socket = signalingSocket;
+    let settled = false;
+    let lastError;
+    const timeout = setTimeout(() => {
+      finish(lastError ?? new Error('Timed out waiting for the signaling server.'));
+    }, SIGNALING_CONNECT_TIMEOUT_MS);
+
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      socket.off('connect', onConnect);
+      socket.off('connect_error', onConnectError);
+      socket.io.off('reconnect_failed', onReconnectFailed);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onConnect = () => finish();
+    const onConnectError = (error) => { lastError = error; };
+    const onReconnectFailed = () => finish(lastError ?? new Error('Connection retries were exhausted.'));
+
+    socket.once('connect', onConnect);
+    socket.on('connect_error', onConnectError);
+    socket.io.on('reconnect_failed', onReconnectFailed);
+    socket.connect();
   }).catch((error) => {
     signalingSocket?.disconnect();
     signalingSocket = undefined;
-    throw new Error(`Could not connect to signaling server: ${error.message}`);
+    throw new Error(`Could not connect to signaling server: ${error.message}. The hosted server may be waking up; wait briefly and try again.`);
   });
 
   return { id: signalingSocket.id };

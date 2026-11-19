@@ -1,4 +1,5 @@
 const { createServer } = require('node:http');
+const { randomUUID } = require('node:crypto');
 const express = require('express');
 const { Server } = require('socket.io');
 
@@ -53,7 +54,18 @@ function normalizePlayback(type, value) {
   return {};
 }
 
-function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '*' } = {}) {
+function writeLog(logger, level, event, details = {}) {
+  const write = logger?.[level];
+  if (typeof write !== 'function') return;
+  write.call(logger, JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level,
+    event,
+    ...details,
+  }));
+}
+
+function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '*', logger = console } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.get('/health', (_request, response) => response.json({ status: 'ok' }));
@@ -65,7 +77,15 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
   });
   const rooms = new Map();
 
-  function leaveRoom(socket) {
+  io.engine.on('connection_error', (error) => {
+    writeLog(logger, 'warn', 'transport.connection_error', {
+      code: error.code,
+      message: error.message,
+      transport: error.context?.transport?.name ?? null,
+    });
+  });
+
+  function leaveRoom(socket, reason = 'leave') {
     const roomId = socket.data.roomId;
     const room = roomId && rooms.get(roomId);
     if (!room) {
@@ -78,10 +98,20 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
     socket.leave(roomId);
     socket.data.roomId = null;
     io.to(roomId).emit('peer-left', { id: socket.id, username: member?.username ?? 'Guest' });
+    writeLog(logger, 'info', 'room.member_left', {
+      socketId: socket.id,
+      roomRef: room.logId.slice(0, 8),
+      reason,
+      memberCount: room.members.size,
+    });
 
     if (room.hostId === socket.id) {
       room.hostId = room.members.keys().next().value ?? null;
       io.to(roomId).emit('host-changed', { hostId: room.hostId });
+      writeLog(logger, 'info', 'room.host_changed', {
+        roomRef: room.logId.slice(0, 8),
+        hasHost: room.hostId !== null,
+      });
     }
 
     if (room.members.size === 0) {
@@ -93,33 +123,67 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
     const roomId = socket.data.roomId;
     const room = roomId && rooms.get(roomId);
     const targetId = payload?.to;
-    if (!room || typeof targetId !== 'string' || !room.members.has(targetId)) {
+    if (!room) {
+      return;
+    }
+    if (typeof targetId !== 'string' || !room.members.has(targetId)) {
+      writeLog(logger, 'warn', 'webrtc.relay_rejected', {
+        socketId: socket.id,
+        roomRef: room.logId.slice(0, 8),
+        event,
+      });
       return;
     }
 
     io.to(targetId).emit(event, { from: socket.id, [field]: payload[field] });
+    writeLog(logger, 'info', 'webrtc.relayed', {
+      socketId: socket.id,
+      roomRef: room.logId.slice(0, 8),
+      event,
+    });
   }
 
   io.on('connection', (socket) => {
     socket.data.roomId = null;
+    writeLog(logger, 'info', 'client.connected', {
+      socketId: socket.id,
+      transport: socket.conn.transport.name,
+    });
+    socket.on('error', (error) => {
+      writeLog(logger, 'error', 'client.error', {
+        socketId: socket.id,
+        message: error.message,
+      });
+    });
 
     socket.on('join-room', (payload, acknowledge = () => {}) => {
       const roomId = normalizeRoomId(payload?.roomId);
       const username = normalizeText(payload?.username, 24);
       if (!roomId || !username) {
+        writeLog(logger, 'warn', 'room.join_rejected', {
+          socketId: socket.id,
+          reason: 'invalid_room_or_username',
+        });
         acknowledge({ ok: false, error: 'Enter a valid room code and display name.' });
         return;
       }
 
-      leaveRoom(socket);
+      leaveRoom(socket, 'switch_room');
       let room = rooms.get(roomId);
       if (room && room.members.size >= MAX_ROOM_SIZE) {
+        writeLog(logger, 'warn', 'room.join_rejected', {
+          socketId: socket.id,
+          roomRef: room.logId.slice(0, 8),
+          reason: 'room_full',
+          memberCount: room.members.size,
+        });
         acknowledge({ ok: false, error: `Rooms are limited to ${MAX_ROOM_SIZE} people.` });
         return;
       }
 
       if (!room) {
         room = {
+          logId: randomUUID(),
           hostId: null,
           members: new Map(),
           playbackState: null,
@@ -134,6 +198,12 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
       socket.data.roomId = roomId;
       socket.data.username = username;
       socket.join(roomId);
+      writeLog(logger, 'info', 'room.member_joined', {
+        socketId: socket.id,
+        roomRef: room.logId.slice(0, 8),
+        isHost: room.hostId === socket.id,
+        memberCount: room.members.size,
+      });
 
       acknowledge({
         ok: true,
@@ -149,7 +219,7 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
     });
 
     socket.on('leave-room', (_payload, acknowledge = () => {}) => {
-      leaveRoom(socket);
+      leaveRoom(socket, 'leave_room');
       acknowledge({ ok: true });
     });
 
@@ -180,6 +250,14 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
         };
       }
 
+      if (type !== 'heartbeat') {
+        writeLog(logger, 'info', 'room.playback_event', {
+          socketId: socket.id,
+          roomRef: room.logId.slice(0, 8),
+          type,
+        });
+      }
+
       socket.to(roomId).emit('sync-event', {
         type,
         payload: normalizedPayload,
@@ -195,6 +273,10 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
         return;
       }
 
+      writeLog(logger, 'info', 'room.sync_requested', {
+        socketId: socket.id,
+        roomRef: room.logId.slice(0, 8),
+      });
       io.to(room.hostId).emit('sync-request', {
         from: socket.id,
         username: socket.data.username,
@@ -213,6 +295,11 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
       }
 
       room.driftTolerance = Math.round(driftTolerance * 10) / 10;
+      writeLog(logger, 'info', 'room.sync_settings_changed', {
+        socketId: socket.id,
+        roomRef: room.logId.slice(0, 8),
+        driftTolerance: room.driftTolerance,
+      });
       io.to(roomId).emit('sync-settings', {
         driftTolerance: room.driftTolerance,
         from: socket.id,
@@ -228,6 +315,11 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
       }
 
       socket.data.lastChatAt = now;
+      writeLog(logger, 'info', 'room.chat_message', {
+        socketId: socket.id,
+        roomRef: rooms.get(roomId)?.logId.slice(0, 8),
+        characters: text.length,
+      });
       io.to(roomId).emit('chat-message', {
         id: `${socket.id}-${now}`,
         senderId: socket.id,
@@ -246,13 +338,20 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
       }
 
       socket.data.lastReactionAt = now;
+      writeLog(logger, 'info', 'room.reaction', {
+        socketId: socket.id,
+        roomRef: rooms.get(roomId)?.logId.slice(0, 8),
+      });
       io.to(roomId).emit('reaction', { emoji, senderId: socket.id, ts: now });
     });
 
     socket.on('webrtc-offer', (payload) => relayToRoomMember(socket, 'webrtc-offer', payload, 'description'));
     socket.on('webrtc-answer', (payload) => relayToRoomMember(socket, 'webrtc-answer', payload, 'description'));
     socket.on('webrtc-ice', (payload) => relayToRoomMember(socket, 'webrtc-ice', payload, 'candidate'));
-    socket.on('disconnect', () => leaveRoom(socket));
+    socket.on('disconnect', (reason) => {
+      writeLog(logger, 'info', 'client.disconnected', { socketId: socket.id, reason });
+      leaveRoom(socket, 'disconnect');
+    });
   });
 
   function listen() {
