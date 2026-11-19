@@ -70,15 +70,17 @@ test('loads video and audio tracks inside the embedded surface', {
 
   await mpv.start();
   const fileLoaded = once(mpv, 'file-loaded');
-  await mpv.loadFile(testVideoPath);
+  await mpv.loadFile(testVideoPath, 0.75);
   await Promise.race([
     fileLoaded,
     new Promise((_, reject) => setTimeout(() => reject(new Error('mpv did not load the test video')), 10000)),
   ]);
 
   const tracks = await mpv.getProperty('track-list');
+  const playbackTime = await mpv.getProperty('time-pos');
   assert.ok(tracks.some((track) => track.type === 'video'));
   assert.ok(tracks.some((track) => track.type === 'audio'));
+  assert.ok(playbackTime >= 0.5, `mpv should resume near the requested position, got ${playbackTime}`);
   await mpv.showReactionBitmap({
     emoji: '😂',
     width: 128,

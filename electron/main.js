@@ -8,6 +8,7 @@ const { io } = require('socket.io-client');
 const { createSignalingServer } = require('../server/signaling');
 const { getSignalingServerUrl } = require('./config');
 const { MpvBridge } = require('./mpv-bridge');
+const { createUserPreferences } = require('./user-preferences');
 const { Win32VideoHost } = require('./win32-video-host');
 
 const roomEvents = [
@@ -28,7 +29,16 @@ let localSignalingServer;
 let signalingServerUrl;
 let mpvBridge;
 let activeEngine = 'browser';
+let userPreferences;
 const videoHosts = new Map();
+const videoFilesByWindow = new Map();
+
+function getUserPreferences() {
+  if (!userPreferences) {
+    userPreferences = createUserPreferences(app.getPath('userData'), app.getPath('downloads'));
+  }
+  return userPreferences;
+}
 
 function getVideoHost(window) {
   if (process.platform !== 'win32') return null;
@@ -131,6 +141,7 @@ function createWindow() {
   window.on('closed', () => {
     const host = videoHosts.get(window.id);
     videoHosts.delete(window.id);
+    videoFilesByWindow.delete(window.id);
     if (mpvBridge) {
       const player = mpvBridge;
       mpvBridge = null;
@@ -144,8 +155,10 @@ function createWindow() {
 
 ipcMain.handle('video:open', async (event) => {
   const window = BrowserWindow.fromWebContents(event.sender);
+  const preferences = getUserPreferences();
   const result = await dialog.showOpenDialog(window, {
     title: 'Open a video',
+    defaultPath: await preferences.getDialogDefaultPath(),
     properties: ['openFile'],
     filters: [
       {
@@ -161,14 +174,17 @@ ipcMain.handle('video:open', async (event) => {
   }
 
   const filePath = result.filePaths[0];
+  await preferences.rememberOpenedFile(filePath);
+  const resumePosition = await preferences.getVideoPosition(filePath) ?? 0;
+  videoFilesByWindow.set(window.id, filePath);
   const videoHost = getVideoHost(window);
   const player = getMpvBridge(videoHost?.mpvWindowId ?? null);
   try {
     await player.start();
     activeEngine = 'mpv';
-    await player.loadFile(filePath);
+    await player.loadFile(filePath, resumePosition);
     await player.setProperty('force-media-title', path.basename(filePath)).catch(() => undefined);
-    return { engine: 'mpv', name: path.basename(filePath) };
+    return { engine: 'mpv', name: path.basename(filePath), resumePosition };
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
     activeEngine = 'browser';
@@ -183,7 +199,17 @@ ipcMain.handle('video:open', async (event) => {
     mpvUnavailable: true,
     name: path.basename(filePath),
     url: pathToFileURL(filePath).href,
+    resumePosition,
   };
+});
+
+ipcMain.handle('video:save-position', async (event, seconds) => {
+  if (!Number.isFinite(seconds) || seconds < 0) return false;
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const filePath = window && videoFilesByWindow.get(window.id);
+  if (!filePath) return false;
+  await getUserPreferences().saveVideoPosition(filePath, seconds);
+  return true;
 });
 
 app.whenReady().then(async () => {
@@ -207,18 +233,24 @@ app.on('window-all-closed', () => {
   }
 });
 
-ipcMain.handle('app:get-config', () => ({
-  signalingServerUrl,
-  mpvPath: process.env.MPV_PATH ?? null,
-  iceServers: [
-    { urls: 'stun:stun.cloudflare.com:3478' },
-    ...(process.env.SYNCWATCH_TURN_URL ? [{
-      urls: process.env.SYNCWATCH_TURN_URL,
-      username: process.env.SYNCWATCH_TURN_USERNAME ?? '',
-      credential: process.env.SYNCWATCH_TURN_CREDENTIAL ?? '',
-    }] : []),
-  ],
-}));
+ipcMain.handle('app:get-config', async () => {
+  const preferences = await getUserPreferences().load();
+  return {
+    signalingServerUrl,
+    mpvPath: process.env.MPV_PATH ?? null,
+    username: preferences.username,
+    iceServers: [
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      ...(process.env.SYNCWATCH_TURN_URL ? [{
+        urls: process.env.SYNCWATCH_TURN_URL,
+        username: process.env.SYNCWATCH_TURN_USERNAME ?? '',
+        credential: process.env.SYNCWATCH_TURN_CREDENTIAL ?? '',
+      }] : []),
+    ],
+  };
+});
+
+ipcMain.handle('app:save-username', (_event, username) => getUserPreferences().saveUsername(username));
 
 ipcMain.handle('mpv:get-state', async () => {
   if (activeEngine !== 'mpv' || !mpvBridge?.socket?.writable) return null;
@@ -362,14 +394,17 @@ app.on('before-quit', (event) => {
 
 ipcMain.handle('subtitle:open', async (event) => {
   const window = BrowserWindow.fromWebContents(event.sender);
+  const preferences = getUserPreferences();
   const result = await dialog.showOpenDialog(window, {
     title: 'Open subtitles',
+    defaultPath: await preferences.getDialogDefaultPath(),
     properties: ['openFile'],
     filters: [{ name: 'Subtitle files', extensions: ['srt', 'vtt'] }],
   });
   if (result.canceled || result.filePaths.length === 0) return null;
 
   const filePath = result.filePaths[0];
+  await preferences.rememberOpenedFile(filePath);
   const fileInfo = await stat(filePath);
   if (fileInfo.size > 5 * 1024 * 1024) {
     throw new Error('Subtitle files must be smaller than 5 MB.');

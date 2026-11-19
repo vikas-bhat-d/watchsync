@@ -34,6 +34,8 @@ let driftCheckTimer;
 let toastTimer;
 let controlsHideTimer;
 let mpvViewportFrame = 0;
+let lastPositionSaveAt = 0;
+let pendingBrowserResumePosition = 0;
 let unreadMessages = 0;
 let lastHostState = null;
 const subtitleBlobUrls = [];
@@ -122,6 +124,14 @@ function updateTime() {
   if (Number.isFinite(duration) && duration > 0 && !seek.matches(':active')) {
     seek.value = String(Math.round((position / duration) * 1000));
   }
+}
+
+function persistVideoPosition(seconds = playerPosition(), force = false) {
+  if (!hasLoadedVideo() || !Number.isFinite(seconds) || seconds < 0) return;
+  const now = Date.now();
+  if (!force && now - lastPositionSaveAt < 5000) return;
+  lastPositionSaveAt = now;
+  window.syncwatch.saveVideoPosition(seconds).catch(() => {});
 }
 
 function updateMpvViewport() {
@@ -328,7 +338,10 @@ function handleMpvEvent({ name, value }) {
     return;
   }
 
-  if (name === 'time-pos' && Number.isFinite(value)) mpvState.position = value;
+  if (name === 'time-pos' && Number.isFinite(value)) {
+    mpvState.position = value;
+    persistVideoPosition(value);
+  }
   else if (name === 'duration' && Number.isFinite(value)) mpvState.duration = value;
   else if (name === 'pause' && typeof value === 'boolean') mpvState.paused = value;
   else if (name === 'speed' && Number.isFinite(value)) {
@@ -388,9 +401,14 @@ function updateRoomUi() {
 async function openVideo() {
   byId('media-error').hidden = true;
   try {
+    await persistVideoPosition(playerPosition(), true);
     const selectedVideo = await window.syncwatch.openVideo();
     if (!selectedVideo) return;
 
+    lastPositionSaveAt = 0;
+    pendingBrowserResumePosition = Number.isFinite(selectedVideo.resumePosition)
+      ? selectedVideo.resumePosition
+      : 0;
     playerEngine = selectedVideo.engine;
     byId('empty-state').hidden = true;
     byId('mpv-status').hidden = playerEngine !== 'mpv';
@@ -519,6 +537,15 @@ function startSyncTimers() {
   }, 5000);
 }
 
+async function saveUsernamePreference(username = usernameInput.value.trim()) {
+  if (!username) return;
+  try {
+    await window.syncwatch.saveUsername(username);
+  } catch (error) {
+    showToast(`Could not save display name: ${error.message}`);
+  }
+}
+
 async function joinRoom(roomId) {
   const username = usernameInput.value.trim();
   if (!username) {
@@ -534,6 +561,7 @@ async function joinRoom(roomId) {
 
   setRoomMessage('Connecting to the watch room...');
   try {
+    await saveUsernamePreference(username);
     const connection = await window.syncwatch.connect(signalingServerUrl);
     const response = await window.syncwatch.joinRoom({ roomId, username });
     if (!response.ok) {
@@ -549,7 +577,7 @@ async function joinRoom(roomId) {
       driftTolerance: response.settings?.driftTolerance ?? 3,
     };
     usernameInput.value = response.username;
-    localStorage.setItem('syncwatch-username', response.username);
+    await saveUsernamePreference(response.username);
     roomCodeInput.value = response.roomId;
     displayNames.set(connection.id, response.username);
     for (const peer of response.peers) {
@@ -980,6 +1008,7 @@ document.querySelectorAll('.mode-button').forEach((button) => {
 });
 
 document.querySelectorAll('#open-video, #open-empty').forEach((button) => button.addEventListener('click', openVideo));
+usernameInput.addEventListener('change', () => { void saveUsernamePreference(); });
 byId('create-room').addEventListener('click', createRoom);
 byId('join-room').addEventListener('click', () => joinRoom(roomCodeInput.value.trim()));
 byId('leave-room').addEventListener('click', leaveRoom);
@@ -1036,6 +1065,7 @@ playPauseButton.addEventListener('click', async () => {
     if (playerEngine === 'mpv') setMpvProperty('pause');
     else video.pause();
     sendHostEvent('pause');
+    persistVideoPosition(playerPosition(), true);
   }
   updatePlaybackControls();
 });
@@ -1156,6 +1186,10 @@ document.querySelectorAll('.reaction-picker button').forEach((button) => {
 });
 
 video.addEventListener('loadedmetadata', () => {
+  if (pendingBrowserResumePosition > 0 && Number.isFinite(video.duration) && video.duration > 0) {
+    video.currentTime = Math.min(pendingBrowserResumePosition, Math.max(0, video.duration - 0.25));
+  }
+  pendingBrowserResumePosition = 0;
   updateTime();
   video.volume = Number(byId('volume').value) / 100;
   video.muted = false;
@@ -1173,10 +1207,14 @@ video.addEventListener('loadedmetadata', () => {
 video.addEventListener('loadeddata', updateAudioTracks);
 video.addEventListener('addtrack', updateAudioTracks);
 video.textTracks?.addEventListener('addtrack', updateSubtitleTracks);
-video.addEventListener('timeupdate', updateTime);
+video.addEventListener('timeupdate', () => {
+  updateTime();
+  persistVideoPosition();
+});
 video.addEventListener('play', updatePlaybackControls);
 video.addEventListener('pause', updatePlaybackControls);
 video.addEventListener('ended', updatePlaybackControls);
+window.addEventListener('pagehide', () => persistVideoPosition(playerPosition(), true));
 video.addEventListener('error', () => {
   byId('playback-status').textContent = 'Unsupported video format';
   byId('media-error').textContent = 'This file is not supported by the current browser player. mpv playback is the next player integration.';
@@ -1185,11 +1223,16 @@ video.addEventListener('error', () => {
 
 window.syncwatch.onRoomEvent(handleRoomEvent);
 window.syncwatch.onMpvEvent(handleMpvEvent);
+const legacyUsername = localStorage.getItem('syncwatch-username') ?? '';
 window.syncwatch.getConfig().then((config) => {
   signalingServerUrl = config.signalingServerUrl;
   iceServers = config.iceServers ?? iceServers;
+  if (!usernameInput.value.trim()) {
+    usernameInput.value = config.username || legacyUsername;
+  }
+  if (legacyUsername) localStorage.removeItem('syncwatch-username');
+  void saveUsernamePreference();
 }).catch(() => {});
-usernameInput.value = localStorage.getItem('syncwatch-username') ?? '';
 updateRoomUi();
 updateTime();
 updateMuteButton();

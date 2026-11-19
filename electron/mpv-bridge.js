@@ -224,7 +224,10 @@ class MpvBridge extends EventEmitter {
     return this.command(['set_property', name, value]);
   }
 
-  loadFile(filePath) {
+  loadFile(filePath, startSeconds = 0) {
+    if (Number.isFinite(startSeconds) && startSeconds > 0) {
+      return this.command(['loadfile', filePath, 'replace', -1, { start: String(startSeconds) }]);
+    }
     return this.command(['loadfile', filePath, 'replace']);
   }
 

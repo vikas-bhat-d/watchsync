@@ -756,6 +756,11 @@ h2 {
   font-size: 14px;
 }
 
+.video-tile.has-camera .video-placeholder,
+.video-placeholder[hidden] {
+  display: none;
+}
+
 .video-name {
   position: absolute;
   z-index: 2;
