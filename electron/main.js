@@ -3,7 +3,7 @@ const { readFile, stat } = require('node:fs/promises');
 const path = require('node:path');
 const { tmpdir } = require('node:os');
 const { pathToFileURL } = require('node:url');
-const { app, BrowserWindow, dialog, ipcMain, session } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, screen, session } = require('electron');
 const { io } = require('socket.io-client');
 const { createSignalingServer } = require('../server/signaling');
 const { getSignalingServerUrl } = require('./config');
@@ -19,6 +19,7 @@ const outgoingEvents = new Set([
   'sync-event', 'request-sync', 'chat-message', 'reaction',
   'webrtc-offer', 'webrtc-answer', 'webrtc-ice', 'sync-settings',
 ]);
+const reactionEmojis = new Set(['❤️', '😂', '👏', '😮', '🔥', '😭', '🎉']);
 const sessionDataPath = path.join(tmpdir(), `syncwatch-session-${process.pid}`);
 mkdirSync(sessionDataPath, { recursive: true });
 app.setPath('sessionData', sessionDataPath);
@@ -238,6 +239,12 @@ ipcMain.handle('mpv:command', async (_event, action, value) => {
   }
 
   if (action === 'refresh-tracks') return mpvBridge.getProperty('track-list');
+  if (action === 'reaction' && value && reactionEmojis.has(value.emoji) &&
+    value.width === 128 && value.height === 128 && value.pixels instanceof Uint8Array &&
+    value.pixels.byteLength === 128 * 128 * 4
+  ) {
+    return mpvBridge.showReactionBitmap(value);
+  }
   if (action === 'play') return mpvBridge.setProperty('pause', false);
   if (action === 'pause') return mpvBridge.setProperty('pause', true);
   if (action === 'seek' && Number.isFinite(value) && value >= 0) return mpvBridge.seek(value);
@@ -385,6 +392,19 @@ ipcMain.handle('mpv:set-viewport', (event, bounds) => {
   if (![x, y, width, height].every(Number.isFinite) || width < 0 || height < 0 || width > 10000 || height > 10000) {
     throw new Error('Invalid mpv viewport bounds.');
   }
-  host.setBounds({ x, y, width, height, scaleFactor, visible: width > 0 && height > 0 });
+  const scale = Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1;
+  const contentBounds = window.getContentBounds();
+  const contentOrigin = screen.dipToScreenPoint({ x: contentBounds.x, y: contentBounds.y });
+  const parentOrigin = host.getParentClientOrigin();
+  host.setBounds({
+    x,
+    y,
+    width,
+    height,
+    scaleFactor: scale,
+    parentOffsetX: contentOrigin.x - parentOrigin.x,
+    parentOffsetY: contentOrigin.y - parentOrigin.y,
+    visible: width > 0 && height > 0,
+  });
   return true;
 });

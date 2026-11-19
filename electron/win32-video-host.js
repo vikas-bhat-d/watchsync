@@ -24,6 +24,7 @@ function getApi() {
     findWindowEx: user32.func('void * __stdcall FindWindowExW(void *, void *, str16, str16)'),
     getWindowThreadProcessId: user32.func('uint32_t __stdcall GetWindowThreadProcessId(void *, _Out_ uint32_t *)'),
     setWindowPos: user32.func('bool __stdcall SetWindowPos(void *, void *, int32_t, int32_t, int32_t, int32_t, uint32_t)'),
+    clientToScreen: user32.func('bool __stdcall ClientToScreen(void *, void *)'),
     showWindow: user32.func('bool __stdcall ShowWindow(void *, int32_t)'),
     destroyWindow: user32.func('bool __stdcall DestroyWindow(void *)'),
     getDesktopWindow: user32.func('void * __stdcall GetDesktopWindow(void)'),
@@ -58,10 +59,20 @@ class Win32VideoHost {
     return Number(this.handle & 0xffffffffn);
   }
 
-  setBounds({ x, y, width, height, scaleFactor = 1, visible = true }) {
+  getParentClientOrigin() {
+    const point = Buffer.alloc(8);
+    if (!this.api.clientToScreen(this.parentHandle, point)) {
+      throw new Error('Could not read the native video parent origin.');
+    }
+    return { x: point.readInt32LE(0), y: point.readInt32LE(4) };
+  }
+
+  setBounds({ x, y, width, height, scaleFactor = 1, parentOffsetX = 0, parentOffsetY = 0, visible = true }) {
     const scale = Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1;
     const bounds = [x, y, width, height].map((value) => Math.round(value * scale));
-    const [left, top, scaledWidth, scaledHeight] = bounds;
+    const [scaledX, scaledY, scaledWidth, scaledHeight] = bounds;
+    const left = scaledX + (Number.isFinite(parentOffsetX) ? Math.round(parentOffsetX) : 0);
+    const top = scaledY + (Number.isFinite(parentOffsetY) ? Math.round(parentOffsetY) : 0);
     if (scaledWidth < 1 || scaledHeight < 1) {
       this.api.showWindow(this.handle, SW_HIDE);
       return;

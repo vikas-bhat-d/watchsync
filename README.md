@@ -112,8 +112,8 @@ Keep TURN credentials private. Room codes are the only access check currently; u
 1. Enter a display name and select **Create room**. Copy the room code and send it to the other participants.
 2. Other participants enter that code and select **Join**. Rooms allow up to four people.
 3. Everyone selects **Open file** and opens their own local copy of the same video. On Windows, mpv renders inside the SyncWatch window and SyncWatch controls playback. Video files are not uploaded or sent through the signaling server.
-4. Anyone in the room can play, pause, seek, or change playback speed. The last action applies to everyone. Guests can select **Request sync**; the host can force-sync and set the room drift tolerance.
-5. Use the chat composer or reaction buttons to send messages and floating emoji reactions.
+4. Anyone in the room can play, pause, seek, or change playback speed. The last action applies to everyone. Space toggles play/pause, Left and Right seek 10 seconds, and M toggles local mute; shortcuts pause while typing. Guests can select **Request sync**; the host can force-sync and set the room drift tolerance.
+5. Use the chat composer or reaction buttons to send messages and emoji reactions. Reactions use the floating browser animation or a full-color rising mpv overlay, depending on the active player.
 6. Audio track, subtitles, aspect ratio, and volume are local to each participant and are not shared. Camera and microphone start off. Select **Camera on** or **Mic on** to request device access. Use the PiP button on a webcam tile for native picture-in-picture where available; otherwise it toggles a floating in-app tile.
 7. Select **Leave room** to disconnect. Theater mode narrows the sidebar to quick actions; Panel mode shows room, video, and chat controls.
 

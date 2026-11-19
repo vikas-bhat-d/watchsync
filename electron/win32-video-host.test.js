@@ -15,6 +15,8 @@ test('creates and positions a native child video surface on Windows', {
   const sibling = new Win32VideoHost(parent.handle);
   try {
     assert.ok(host.mpvWindowId > 0);
+    const parentOrigin = host.getParentClientOrigin();
+    assert.ok(Number.isInteger(parentOrigin.x) && Number.isInteger(parentOrigin.y));
     host.setBounds({ x: 0, y: 0, width: 32, height: 24, visible: false });
     assert.equal(host.api.getWindow(parent.handle, GW_CHILD), host.handle);
     assert.equal(host.findChildWindowForProcess(0xffffffff), null);
@@ -77,5 +79,13 @@ test('loads video and audio tracks inside the embedded surface', {
   const tracks = await mpv.getProperty('track-list');
   assert.ok(tracks.some((track) => track.type === 'video'));
   assert.ok(tracks.some((track) => track.type === 'audio'));
+  await mpv.showReactionBitmap({
+    emoji: '😂',
+    width: 128,
+    height: 128,
+    pixels: new Uint8Array(128 * 128 * 4),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 2500));
+  assert.equal(mpv.reactionTimers.size, 0);
   assert.equal(findTopLevelWindowForProcess(mpv.child.pid), null, 'playing mpv should remain embedded');
 });

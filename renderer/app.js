@@ -655,7 +655,41 @@ function updateUnreadBadge() {
   badge.hidden = unreadMessages === 0;
 }
 
+function createReactionBitmap(emoji) {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) throw new Error('Could not render the reaction emoji.');
+
+  context.font = '104px "Segoe UI Emoji", "Apple Color Emoji", sans-serif';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillStyle = '#fff';
+  context.shadowColor = 'rgba(0, 0, 0, 0.5)';
+  context.shadowBlur = 8;
+  context.shadowOffsetY = 3;
+  context.fillText(emoji, size / 2, size / 2);
+
+  const rgba = context.getImageData(0, 0, size, size).data;
+  const pixels = new Uint8Array(rgba.length);
+  for (let offset = 0; offset < rgba.length; offset += 4) {
+    const alpha = rgba[offset + 3] / 255;
+    pixels[offset] = Math.round(rgba[offset + 2] * alpha);
+    pixels[offset + 1] = Math.round(rgba[offset + 1] * alpha);
+    pixels[offset + 2] = Math.round(rgba[offset] * alpha);
+    pixels[offset + 3] = rgba[offset + 3];
+  }
+  return { emoji, width: size, height: size, pixels };
+}
+
 function showFloatingReaction(emoji, senderId) {
+  if (playerEngine === 'mpv') {
+    window.syncwatch.mpvCommand('reaction', createReactionBitmap(emoji)).catch((error) => showToast(error.message));
+    return;
+  }
+
   const reaction = document.createElement('span');
   const position = Math.floor(Math.random() * 7);
   reaction.className = `floating-reaction reaction-position-${position}`;
@@ -1017,6 +1051,25 @@ byId('forward').addEventListener('click', () => {
   if (playerEngine === 'mpv') setMpvProperty('seek', seconds);
   else video.currentTime = seconds;
   sendHostEvent('seek', { seconds });
+});
+document.addEventListener('keydown', (event) => {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  if (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable], dialog[open]')) return;
+
+  const button = event.code === 'Space'
+    ? playPauseButton
+    : event.code === 'ArrowLeft'
+      ? byId('backward')
+      : event.code === 'ArrowRight'
+        ? byId('forward')
+        : event.code === 'KeyM'
+          ? byId('toggle-mute')
+          : null;
+  const repeatable = event.code === 'ArrowLeft' || event.code === 'ArrowRight';
+  if (!button || button.disabled || (event.repeat && !repeatable)) return;
+
+  event.preventDefault();
+  button.click();
 });
 seek.addEventListener('input', () => {
   if (playerEngine === 'browser' && Number.isFinite(video.duration)) {

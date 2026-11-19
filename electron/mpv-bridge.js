@@ -1,6 +1,7 @@
 const { spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { existsSync, readdirSync, unlinkSync } = require('node:fs');
+const { unlink, writeFile } = require('node:fs/promises');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
@@ -49,6 +50,8 @@ class MpvBridge extends EventEmitter {
     this.nextRequestId = 1;
     this.pending = new Map();
     this.startPromise = null;
+    this.nextOverlayId = 0;
+    this.reactionTimers = new Map();
   }
 
   async start() {
@@ -74,7 +77,7 @@ class MpvBridge extends EventEmitter {
       '--media-controls=no',
       '--input-cursor-passthrough=yes',
       `--force-window=${this.showWindow || this.windowId ? 'yes' : 'no'}`,
-      ...(this.windowId ? [`--wid=${this.windowId}`] : []),
+      ...(this.windowId ? ['--input-vo-keyboard=no', `--wid=${this.windowId}`] : []),
       `--input-ipc-server=${this.ipcPath}`,
       '--title=SyncWatch',
     ];
@@ -82,6 +85,7 @@ class MpvBridge extends EventEmitter {
     this.child.stderr?.on('data', (data) => this.emit('log', data.toString().trim()));
     this.child.on('error', (error) => this.emit('process-error', error));
     this.child.on('exit', (code, signal) => {
+      this.clearReactionTimers();
       this.socket?.destroy();
       this.socket = null;
       this.rejectPending(new Error(`mpv exited (${signal ?? code ?? 'unknown'}).`));
@@ -224,6 +228,64 @@ class MpvBridge extends EventEmitter {
     return this.command(['loadfile', filePath, 'replace']);
   }
 
+  async showReactionBitmap({ width, height, pixels }) {
+    if (width !== 128 || height !== 128 || !(pixels instanceof Uint8Array) || pixels.byteLength !== width * height * 4) {
+      throw new Error('Invalid reaction bitmap.');
+    }
+
+    const [rawWidth, rawHeight] = await Promise.all([this.getProperty('osd-width'), this.getProperty('osd-height')]);
+    const osdWidth = Number(rawWidth) > 0 ? Math.round(Number(rawWidth)) : 1280;
+    const osdHeight = Number(rawHeight) > 0 ? Math.round(Number(rawHeight)) : 720;
+    const lanes = [0.12, 0.24, 0.38, 0.51, 0.64, 0.76, 0.87];
+    const x = Math.round(osdWidth * lanes[Math.floor(Math.random() * lanes.length)]);
+    const displaySize = Math.round(osdHeight * 0.08);
+    const startY = Math.round(osdHeight * 0.83 - (displaySize * 0.5));
+    const rise = Math.round(osdHeight * 0.46);
+    const id = this.nextOverlayId;
+    this.nextOverlayId = (this.nextOverlayId + 1) % 64;
+    const imagePath = path.join(os.tmpdir(), `syncwatch-reaction-${process.pid}-${id}.bgra`);
+    const startedAt = Date.now();
+    const duration = 2400;
+    await writeFile(imagePath, Buffer.from(pixels));
+
+    const removeOverlay = async () => {
+      this.reactionTimers.delete(id);
+      await this.command(['overlay-remove', id]).catch(() => {});
+      await unlink(imagePath).catch(() => {});
+    };
+    const drawFrame = (progress) => {
+      const eased = 1 - ((1 - progress) ** 3);
+      const y = Math.round(startY - (rise * eased));
+      const size = Math.max(1, Math.round(displaySize * (0.75 + (0.45 * eased))));
+      const fadeIn = Math.min(1, progress / 0.12);
+      const fadeOut = progress < 0.72 ? 1 : Math.max(0, (1 - progress) / 0.28);
+      const alpha = Math.min(fadeIn, fadeOut);
+      return this.command(['overlay-add', id, x, y, imagePath, 0, 'bgra', width, height, width * 4,
+        Math.max(1, Math.round(size * alpha)), Math.max(1, Math.round(size * alpha))]);
+    };
+
+    const animate = async () => {
+      const progress = Math.min(1, (Date.now() - startedAt) / duration);
+      if (progress >= 1) {
+        await removeOverlay();
+        return;
+      }
+
+      await drawFrame(progress);
+      const timer = setTimeout(() => {
+        animate().catch(() => removeOverlay());
+      }, 50);
+      this.reactionTimers.set(id, { timer, imagePath });
+    };
+
+    try {
+      await animate();
+    } catch (error) {
+      await unlink(imagePath).catch(() => {});
+      throw error;
+    }
+  }
+
   seek(seconds) {
     return this.command(['seek', seconds, 'absolute+exact']);
   }
@@ -240,8 +302,17 @@ class MpvBridge extends EventEmitter {
     this.pending.clear();
   }
 
+  clearReactionTimers() {
+    for (const { timer, imagePath } of this.reactionTimers.values()) {
+      clearTimeout(timer);
+      unlink(imagePath).catch(() => {});
+    }
+    this.reactionTimers.clear();
+  }
+
   async stop() {
     if (!this.child) return;
+    this.clearReactionTimers();
     const child = this.child;
     try {
       await this.command(['quit']);
