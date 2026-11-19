@@ -315,12 +315,13 @@ ipcMain.handle('room:connect', async (_event, serverUrl) => {
     autoConnect: false,
     timeout: 20000,
     reconnection: true,
-    reconnectionAttempts: 3,
+    reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 5000,
   });
+  const socket = signalingSocket;
   for (const eventName of roomEvents) {
-    signalingSocket.on(eventName, (...args) => {
+    socket.on(eventName, (...args) => {
       if (eventName === 'connect_error') {
         console.warn('[syncwatch] signaling connection attempt failed:', args[0]?.message ?? args[0]);
       } else if (eventName === 'disconnect') {
@@ -328,14 +329,14 @@ ipcMain.handle('room:connect', async (_event, serverUrl) => {
       }
       for (const window of BrowserWindow.getAllWindows()) {
         if (!window.isDestroyed()) {
-          window.webContents.send('room:event', { event: eventName, args });
+          const eventArgs = eventName === 'connect' ? [{ id: socket.id }] : args;
+          window.webContents.send('room:event', { event: eventName, args: eventArgs });
         }
       }
     });
   }
 
   await new Promise((resolve, reject) => {
-    const socket = signalingSocket;
     let settled = false;
     let lastError;
     const timeout = setTimeout(() => {

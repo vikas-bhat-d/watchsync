@@ -149,6 +149,18 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
       socketId: socket.id,
       transport: socket.conn.transport.name,
     });
+    socket.conn.on('upgrade', (transport) => {
+      writeLog(logger, 'info', 'client.transport_upgraded', {
+        socketId: socket.id,
+        transport: transport.name,
+      });
+    });
+    socket.conn.on('upgradeError', (error) => {
+      writeLog(logger, 'warn', 'client.transport_upgrade_failed', {
+        socketId: socket.id,
+        message: error.message,
+      });
+    });
     socket.on('error', (error) => {
       writeLog(logger, 'error', 'client.error', {
         socketId: socket.id,
@@ -250,7 +262,15 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
         };
       }
 
-      if (type !== 'heartbeat') {
+      if (type === 'heartbeat') {
+        writeLog(logger, 'info', 'room.heartbeat_received', {
+          socketId: socket.id,
+          roomRef: room.logId.slice(0, 8),
+          seconds: normalizedPayload.seconds,
+          playing: normalizedPayload.playing,
+          speed: normalizedPayload.speed,
+        });
+      } else {
         writeLog(logger, 'info', 'room.playback_event', {
           socketId: socket.id,
           roomRef: room.logId.slice(0, 8),

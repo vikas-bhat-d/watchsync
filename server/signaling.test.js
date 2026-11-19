@@ -41,7 +41,7 @@ function join(client, roomId, username) {
 }
 
 test('all members can control playback while heartbeat and force-sync remain host-only', async (t) => {
-  const { connect, server } = await setup(t);
+  const { connect, server, logs } = await setup(t);
   const host = await connect();
   const guest = await connect();
 
@@ -96,11 +96,44 @@ test('all members can control playback while heartbeat and force-sync remain hos
     payload: { seconds: 42, playing: true, speed: 1.5 },
   });
   assert.equal((await state)[0].type, 'heartbeat');
+  assert.deepEqual(
+    logs.filter((entry) => entry.event === 'room.heartbeat_received').map(({ socketId, seconds, playing, speed }) => (
+      { socketId, seconds, playing, speed }
+    )),
+    [{ socketId: host.id, seconds: 42, playing: true, speed: 1.5 }],
+  );
   assert.deepEqual(server.rooms.get('movie-night-42').playbackState, {
     seconds: 42,
     playing: true,
     speed: 1.5,
   });
+});
+
+test('a disconnected host can rejoin with a new socket and recover room playback state', async (t) => {
+  const { connect } = await setup(t);
+  const host = await connect();
+  const guest = await connect();
+  await join(host, 'resume-room', 'Host');
+  await join(guest, 'resume-room', 'Guest');
+
+  const playbackEvent = once(guest, 'sync-event');
+  host.emit('sync-event', {
+    type: 'heartbeat',
+    payload: { seconds: 37, playing: true, speed: 1.25 },
+  });
+  await playbackEvent;
+
+  const peerLeft = once(guest, 'peer-left');
+  host.disconnect();
+  await peerLeft;
+
+  const reconnectedHost = await connect();
+  assert.notEqual(reconnectedHost.id, host.id);
+  const response = await join(reconnectedHost, 'resume-room', 'Host');
+  assert.equal(response.ok, true);
+  assert.equal(response.isHost, false);
+  assert.equal(response.peers.length, 1);
+  assert.deepEqual(response.playbackState, { seconds: 37, playing: true, speed: 1.25 });
 });
 
 test('chat messages are relayed with server-assigned identity and trimmed text', async (t) => {

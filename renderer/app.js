@@ -26,6 +26,7 @@ const mpvState = {
 };
 
 let roomState = null;
+let roomRestoreInProgress = false;
 let playerEngine = 'browser';
 let signalingServerUrl = 'http://127.0.0.1:3000';
 let iceServers = [{ urls: 'stun:stun.cloudflare.com:3478' }];
@@ -645,6 +646,58 @@ async function leaveRoom() {
   await window.syncwatch.disconnect().catch(() => {});
 }
 
+async function restoreRoomAfterReconnect(socketId) {
+  if (!roomState || !socketId || roomState.socketId === socketId || roomRestoreInProgress) return;
+
+  roomRestoreInProgress = true;
+  clearInterval(hostHeartbeatTimer);
+  clearInterval(driftCheckTimer);
+  setConnectionLabel('Restoring room...', 'error');
+  try {
+    for (const peerId of [...peers.keys()]) closePeer(peerId);
+    displayNames.clear();
+    const response = await window.syncwatch.joinRoom({
+      roomId: roomState.roomId,
+      username: roomState.username,
+    });
+    if (!response.ok) throw new Error(response.error);
+
+    roomState = {
+      ...roomState,
+      roomId: response.roomId,
+      username: response.username,
+      socketId,
+      hostId: response.hostId,
+      isHost: response.isHost,
+      driftTolerance: response.settings?.driftTolerance ?? 3,
+    };
+    displayNames.set(socketId, response.username);
+    for (const peer of response.peers) {
+      displayNames.set(peer.id, peer.username);
+      createPeerConnection(peer.id, peer.username);
+    }
+
+    if (response.playbackState) {
+      lastHostState = { ...response.playbackState, receivedAt: Date.now() };
+      if (hasLoadedVideo()) applyHostEvent('force-sync', response.playbackState);
+    }
+    setConnectionLabel('Connected to room', 'connected');
+    setRoomMessage(roomState.isHost
+      ? 'Connection restored. You are hosting.'
+      : 'Connection restored. Room playback is synced.');
+    updateRoomUi();
+    updatePeerCount();
+    startSyncTimers();
+    if (roomState.isHost) sendHostEvent('heartbeat', hostSnapshot());
+    appendSystemMessage(`${response.username} reconnected to the room`);
+  } catch (error) {
+    setConnectionLabel('Could not restore room', 'error');
+    setRoomMessage(`Reconnected to the server, but could not rejoin: ${error.message}`, true);
+  } finally {
+    roomRestoreInProgress = false;
+  }
+}
+
 function appendSystemMessage(text) {
   const item = document.createElement('p');
   item.className = 'chat-system-message';
@@ -939,9 +992,16 @@ async function openWebcamPictureInPicture() {
 
 function handleRoomEvent(event, payload) {
   if (event === 'connect') {
-    setConnectionLabel(roomState ? 'Connected to room' : 'Connected to server', 'connected');
+    if (roomState && payload?.id !== roomState.socketId) {
+      void restoreRoomAfterReconnect(payload?.id);
+    } else {
+      setConnectionLabel(roomState ? 'Connected to room' : 'Connected to server', 'connected');
+    }
   } else if (event === 'disconnect') {
+    clearInterval(hostHeartbeatTimer);
+    clearInterval(driftCheckTimer);
     setConnectionLabel('Connection lost', 'error');
+    if (roomState) setRoomMessage('Connection lost. Trying to reconnect to the room...', true);
   } else if (event === 'connect_error') {
     setConnectionLabel('Reconnecting to server...', 'error');
   } else if (event === 'peer-joined') {
