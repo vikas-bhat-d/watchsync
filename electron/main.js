@@ -1,5 +1,6 @@
 const { mkdirSync } = require('node:fs');
-const { readFile, stat } = require('node:fs/promises');
+const { appendFile, mkdir, readFile, rename, stat } = require('node:fs/promises');
+const { randomUUID } = require('node:crypto');
 const path = require('node:path');
 const { tmpdir } = require('node:os');
 const { pathToFileURL } = require('node:url');
@@ -22,6 +23,30 @@ const outgoingEvents = new Set([
 ]);
 const reactionEmojis = new Set(['❤️', '😂', '👏', '😮', '🔥', '😭', '🎉']);
 const SIGNALING_CONNECT_TIMEOUT_MS = 75000;
+const participantId = randomUUID();
+const MAX_CLIENT_LOG_BYTES = 2 * 1024 * 1024;
+const clientDiagnosticEvents = new Set([
+  'media.local_track_acquired',
+  'media.local_track_state',
+  'media.sender_track_attached',
+  'media.peer_state',
+  'media.remote_track_received',
+  'media.remote_track_state',
+  'media.audio_playback',
+  'media.receiver_stats',
+  'media.sender_stats',
+  'media.audio_analyser',
+  'media.audio_context',
+  'media.media_device_error',
+  'media.local_audio_level',
+  'media.local_audio_silence',
+]);
+const clientDiagnosticFields = new Set([
+  'kind', 'peerId', 'state', 'iceState', 'signalingState', 'enabled', 'muted',
+  'readyState', 'bytesSent', 'bytesReceived', 'packetsSent', 'packetsReceived',
+  'samplesReceived', 'audioLevel', 'totalAudioEnergy', 'volume', 'audioContextState',
+  'errorName', 'message', 'source', 'threshold', 'silenceSeconds',
+]);
 const sessionDataPath = path.join(tmpdir(), `syncwatch-session-${process.pid}`);
 mkdirSync(sessionDataPath, { recursive: true });
 app.setPath('sessionData', sessionDataPath);
@@ -34,6 +59,35 @@ let activeEngine = 'browser';
 let userPreferences;
 const videoHosts = new Map();
 const videoFilesByWindow = new Map();
+
+async function writeClientDiagnostic(event, details = {}) {
+  if (!clientDiagnosticEvents.has(event)) return false;
+  const safeDetails = {};
+  for (const [key, value] of Object.entries(details)) {
+    if (!clientDiagnosticFields.has(key)) continue;
+    if (typeof value === 'string') safeDetails[key] = value.slice(0, 240);
+    else if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) {
+      safeDetails[key] = value;
+    }
+  }
+
+  const logPath = path.join(app.getPath('userData'), 'logs', 'client.log');
+  await mkdir(path.dirname(logPath), { recursive: true });
+  try {
+    if ((await stat(logPath)).size >= MAX_CLIENT_LOG_BYTES) {
+      await rename(logPath, `${logPath}.1`).catch(() => undefined);
+    }
+  } catch {
+    // The log file has not been created yet.
+  }
+  await appendFile(logPath, `${JSON.stringify({
+    timestamp: new Date().toISOString(),
+    processId: process.pid,
+    event,
+    ...safeDetails,
+  })}\n`, 'utf8');
+  return true;
+}
 
 function getUserPreferences() {
   if (!userPreferences) {
@@ -266,6 +320,13 @@ ipcMain.handle('app:get-config', async () => {
 
 ipcMain.handle('app:save-username', (_event, username) => getUserPreferences().saveUsername(username));
 
+ipcMain.handle('media:log-diagnostic', (_event, event, details) => (
+  writeClientDiagnostic(event, details).catch((error) => {
+    console.error('[syncwatch] Could not write media diagnostic:', error.message);
+    return false;
+  })
+));
+
 ipcMain.handle('mpv:get-state', async () => {
   if (activeEngine !== 'mpv' || !mpvBridge?.socket?.writable) return null;
   const properties = ['time-pos', 'duration', 'pause', 'speed', 'volume', 'mute', 'track-list'];
@@ -387,7 +448,7 @@ ipcMain.handle('room:join', async (_event, payload) => {
   if (!signalingSocket?.connected) {
     throw new Error('Connect to the signaling server first.');
   }
-  return signalingSocket.timeout(5000).emitWithAck('join-room', payload);
+  return signalingSocket.timeout(5000).emitWithAck('join-room', { ...payload, participantId });
 });
 
 ipcMain.handle('room:leave', async () => {

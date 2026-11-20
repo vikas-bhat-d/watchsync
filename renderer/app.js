@@ -40,6 +40,8 @@ let driftCheckTimer;
 let toastTimer;
 let theaterMessageTimer;
 let controlsHideTimer;
+let remoteAudioContext;
+let localMicMonitor;
 let mpvViewportFrame = 0;
 let lastPositionSaveAt = 0;
 let pendingBrowserResumePosition = 0;
@@ -68,6 +70,12 @@ function showToast(message) {
   toastTimer = setTimeout(() => {
     toast.hidden = true;
   }, 2800);
+}
+
+function recordMediaDiagnostic(event, details = {}) {
+  window.syncwatch.logMediaDiagnostic(event, details).catch((error) => {
+    console.warn('[syncwatch] Could not record media diagnostic:', error.message);
+  });
 }
 
 function setRoomMessage(message, isError = false) {
@@ -665,6 +673,7 @@ async function leaveRoom() {
   clearInterval(hostHeartbeatTimer);
   clearInterval(driftCheckTimer);
   for (const peerId of [...peers.keys()]) closePeer(peerId);
+  stopLocalMicrophoneMonitor();
   for (const track of localStream.getTracks()) {
     track.stop();
     localStream.removeTrack(track);
@@ -841,12 +850,27 @@ function retryRemoteAudioPlayback(state, username) {
   audio.muted = false;
   audio.volume = 1;
   audio.play().then(() => {
+    recordMediaDiagnostic('media.audio_playback', {
+      peerId: state.peerId,
+      state: 'playing',
+      volume: audio.volume,
+      muted: audio.muted,
+    });
+    startSpeakingMonitor(state);
     if (!state.audioRetryHandler) return;
     document.removeEventListener('pointerdown', state.audioRetryHandler);
     document.removeEventListener('keydown', state.audioRetryHandler);
     state.audioRetryHandler = null;
     state.audioPlaybackNoticeShown = false;
   }).catch((error) => {
+    recordMediaDiagnostic('media.audio_playback', {
+      peerId: state.peerId,
+      state: 'failed',
+      errorName: error.name,
+      message: error.message,
+      volume: audio.volume,
+      muted: audio.muted,
+    });
     if (error.name === 'NotAllowedError') {
       if (!state.audioRetryHandler) {
         state.audioRetryHandler = () => retryRemoteAudioPlayback(state, username);
@@ -863,6 +887,208 @@ function retryRemoteAudioPlayback(state, username) {
   });
 }
 
+function startSpeakingMonitor(state) {
+  if (state.speakingAnalyser || !state.remoteAudioStream.getAudioTracks().length) return;
+  const AudioContextConstructor = window.AudioContext ?? window.webkitAudioContext;
+  if (!AudioContextConstructor) return;
+
+  try {
+    remoteAudioContext ??= new AudioContextConstructor();
+    recordMediaDiagnostic('media.audio_context', {
+      peerId: state.peerId,
+      audioContextState: remoteAudioContext.state,
+    });
+    const source = remoteAudioContext.createMediaStreamSource(state.remoteAudioStream);
+    const analyser = remoteAudioContext.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.72;
+    source.connect(analyser);
+    state.speakingSource = source;
+    state.speakingAnalyser = analyser;
+    state.speakingSamples = new Uint8Array(analyser.fftSize);
+
+    const monitor = () => {
+      if (!state.speakingAnalyser) return;
+      analyser.getByteTimeDomainData(state.speakingSamples);
+      let sum = 0;
+      for (const sample of state.speakingSamples) {
+        const normalized = (sample - 128) / 128;
+        sum += normalized * normalized;
+      }
+      const rms = Math.sqrt(sum / state.speakingSamples.length);
+      const now = Date.now();
+      if (now - (state.lastAudioLevelLogAt ?? 0) >= 2000) {
+        state.lastAudioLevelLogAt = now;
+        recordMediaDiagnostic('media.audio_analyser', {
+          peerId: state.peerId,
+          audioLevel: Number(rms.toFixed(4)),
+        });
+      }
+      const threshold = state.isSpeaking ? 0.014 : 0.022;
+      const isSpeaking = rms > threshold;
+      if (isSpeaking !== state.isSpeaking) {
+        state.isSpeaking = isSpeaking;
+        const tile = document.querySelector(`[data-peer-id="${CSS.escape(state.peerId)}"]`);
+        tile?.classList.toggle('is-speaking', isSpeaking);
+        tile?.setAttribute('aria-label', `${displayNames.get(state.peerId) ?? 'Guest'}${isSpeaking ? ' is speaking' : ''}`);
+      }
+      state.speakingFrame = requestAnimationFrame(monitor);
+    };
+
+    if (remoteAudioContext.state === 'suspended') {
+      remoteAudioContext.resume().then(() => {
+        recordMediaDiagnostic('media.audio_context', {
+          peerId: state.peerId,
+          audioContextState: remoteAudioContext.state,
+        });
+      }).catch((error) => {
+        recordMediaDiagnostic('media.audio_context', {
+          peerId: state.peerId,
+          audioContextState: 'resume_failed',
+          errorName: error.name,
+          message: error.message,
+        });
+      });
+    }
+    state.speakingFrame = requestAnimationFrame(monitor);
+  } catch (error) {
+    console.warn('[syncwatch] Could not monitor remote microphone level:', error.message);
+    recordMediaDiagnostic('media.audio_context', {
+      peerId: state.peerId,
+      state: 'failed',
+      errorName: error.name,
+      message: error.message,
+    });
+  }
+}
+
+async function recordPeerAudioStats(state) {
+  if (state.statsInProgress || state.pc.connectionState === 'closed') return;
+  state.statsInProgress = true;
+  try {
+    const reports = await state.pc.getStats();
+    for (const report of reports.values()) {
+      if ((report.kind ?? report.mediaType) !== 'audio') continue;
+      if (report.type === 'inbound-rtp') {
+        recordMediaDiagnostic('media.receiver_stats', {
+          peerId: state.peerId,
+          bytesReceived: report.bytesReceived ?? 0,
+          packetsReceived: report.packetsReceived ?? 0,
+          samplesReceived: report.totalSamplesReceived ?? 0,
+          audioLevel: Number.isFinite(report.audioLevel) ? Number(report.audioLevel.toFixed(4)) : -1,
+          totalAudioEnergy: Number.isFinite(report.totalAudioEnergy) ? Number(report.totalAudioEnergy.toFixed(4)) : 0,
+        });
+      } else if (report.type === 'outbound-rtp' && !report.isRemote) {
+        recordMediaDiagnostic('media.sender_stats', {
+          peerId: state.peerId,
+          bytesSent: report.bytesSent ?? 0,
+          packetsSent: report.packetsSent ?? 0,
+        });
+      }
+    }
+  } catch (error) {
+    recordMediaDiagnostic('media.peer_state', {
+      peerId: state.peerId,
+      state: 'stats_error',
+      errorName: error.name,
+      message: error.message,
+    });
+  } finally {
+    state.statsInProgress = false;
+  }
+}
+
+function stopLocalMicrophoneMonitor() {
+  if (!localMicMonitor) return;
+  cancelAnimationFrame(localMicMonitor.frame);
+  localMicMonitor.source.disconnect();
+  localMicMonitor.analyser.disconnect();
+  localMicMonitor = null;
+}
+
+function startLocalMicrophoneMonitor(track) {
+  stopLocalMicrophoneMonitor();
+  const AudioContextConstructor = window.AudioContext ?? window.webkitAudioContext;
+  if (!AudioContextConstructor) return;
+
+  try {
+    remoteAudioContext ??= new AudioContextConstructor();
+    const source = remoteAudioContext.createMediaStreamSource(new MediaStream([track]));
+    const analyser = remoteAudioContext.createAnalyser();
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.15;
+    source.connect(analyser);
+    const monitor = {
+      track,
+      source,
+      analyser,
+      samples: new Uint8Array(analyser.fftSize),
+      startedAt: Date.now(),
+      lastLogAt: 0,
+      hasSignal: false,
+      warned: false,
+      frame: 0,
+    };
+    localMicMonitor = monitor;
+
+    const sampleInput = () => {
+      if (localMicMonitor !== monitor) return;
+      analyser.getByteTimeDomainData(monitor.samples);
+      let sum = 0;
+      for (const sample of monitor.samples) {
+        const normalized = (sample - 128) / 128;
+        sum += normalized * normalized;
+      }
+      const audioLevel = Math.sqrt(sum / monitor.samples.length);
+      const now = Date.now();
+      if (now - monitor.lastLogAt >= 2000) {
+        monitor.lastLogAt = now;
+        recordMediaDiagnostic('media.local_audio_level', {
+          kind: 'audio',
+          audioLevel: Number(audioLevel.toFixed(4)),
+          enabled: track.enabled,
+          muted: track.muted,
+          readyState: track.readyState,
+        });
+      }
+      if (audioLevel >= 0.01) monitor.hasSignal = true;
+      if (!monitor.hasSignal && !monitor.warned && now - monitor.startedAt >= 8000) {
+        monitor.warned = true;
+        showToast('No sound detected from your mic. Check Windows input selection or hardware mute.');
+        recordMediaDiagnostic('media.local_audio_silence', {
+          kind: 'audio',
+          audioLevel: Number(audioLevel.toFixed(4)),
+          threshold: 0.01,
+          silenceSeconds: 8,
+        });
+      }
+      monitor.frame = requestAnimationFrame(sampleInput);
+    };
+
+    remoteAudioContext.resume().then(() => {
+      recordMediaDiagnostic('media.audio_context', {
+        kind: 'local_audio',
+        audioContextState: remoteAudioContext.state,
+      });
+    }).catch((error) => {
+      recordMediaDiagnostic('media.audio_context', {
+        kind: 'local_audio',
+        audioContextState: 'resume_failed',
+        errorName: error.name,
+        message: error.message,
+      });
+    });
+    monitor.frame = requestAnimationFrame(sampleInput);
+  } catch (error) {
+    recordMediaDiagnostic('media.audio_context', {
+      kind: 'local_audio',
+      state: 'monitor_failed',
+      errorName: error.name,
+      message: error.message,
+    });
+  }
+}
+
 function createPeerConnection(peerId, username = 'Guest') {
   if (peers.has(peerId) || !roomState) return peers.get(peerId);
   ensureRemoteTile(peerId, username);
@@ -870,11 +1096,12 @@ function createPeerConnection(peerId, username = 'Guest') {
     iceServers,
   });
   const transceivers = {
-    audio: pc.addTransceiver('audio', { direction: 'recvonly' }),
-    video: pc.addTransceiver('video', { direction: 'recvonly' }),
+    audio: pc.addTransceiver('audio', { direction: 'sendrecv' }),
+    video: pc.addTransceiver('video', { direction: 'sendrecv' }),
   };
   const state = {
     pc,
+    peerId,
     transceivers,
     remoteAudio: null,
     remoteAudioStream: new MediaStream(),
@@ -888,12 +1115,17 @@ function createPeerConnection(peerId, username = 'Guest') {
   };
   peers.set(peerId, state);
   displayNames.set(peerId, username);
+  recordMediaDiagnostic('media.peer_state', {
+    peerId,
+    state: pc.connectionState,
+    iceState: pc.iceConnectionState,
+    signalingState: pc.signalingState,
+  });
+  state.statsTimer = setInterval(() => { void recordPeerAudioStats(state); }, 4000);
   for (const track of localStream.getTracks()) {
     const transceiver = transceivers[track.kind];
     if (track.readyState !== 'live' || !transceiver) continue;
-    transceiver.sender.replaceTrack(track).then(() => {
-      transceiver.direction = 'sendrecv';
-    }).catch((error) => {
+    transceiver.sender.replaceTrack(track).catch((error) => {
       showToast(`Could not attach ${track.kind} track for ${username}: ${error.message}`);
     });
   }
@@ -903,6 +1135,16 @@ function createPeerConnection(peerId, username = 'Guest') {
   };
   pc.ontrack = (event) => {
     if (event.track.kind === 'audio') {
+      console.info(`[syncwatch] remote microphone track received from ${username}; initially muted=${event.track.muted}`);
+      recordMediaDiagnostic('media.remote_track_received', {
+        peerId,
+        kind: event.track.kind,
+        muted: event.track.muted,
+        readyState: event.track.readyState,
+        transceiverMid: event.transceiver?.mid ?? '',
+        direction: event.transceiver?.direction ?? '',
+        currentDirection: event.transceiver?.currentDirection ?? '',
+      });
       if (!state.remoteAudio) {
         const audio = document.createElement('audio');
         audio.className = 'remote-audio-output';
@@ -911,6 +1153,17 @@ function createPeerConnection(peerId, username = 'Guest') {
         audio.muted = false;
         audio.volume = 1;
         audio.setAttribute('aria-label', `${username} microphone`);
+        audio.addEventListener('playing', () => recordMediaDiagnostic('media.audio_playback', {
+          peerId,
+          state: 'playing_event',
+          volume: audio.volume,
+          muted: audio.muted,
+        }));
+        audio.addEventListener('error', () => recordMediaDiagnostic('media.audio_playback', {
+          peerId,
+          state: 'element_error',
+          message: audio.error?.message ?? 'HTML audio playback error',
+        }));
         ensureRemoteTile(peerId, username).append(audio);
         state.remoteAudio = audio;
       }
@@ -918,11 +1171,17 @@ function createPeerConnection(peerId, username = 'Guest') {
         state.remoteAudioStream.addTrack(event.track);
       }
       state.remoteAudio.srcObject = state.remoteAudioStream;
-      event.track.addEventListener('unmute', () => retryRemoteAudioPlayback(state, username), { once: true });
       event.track.addEventListener('unmute', () => {
         console.info(`[syncwatch] received active microphone track from ${username}`);
         showToast(`Microphone audio connected from ${username}.`);
+        recordMediaDiagnostic('media.remote_track_state', { peerId, kind: 'audio', state: 'unmuted' });
+        retryRemoteAudioPlayback(state, username);
       }, { once: true });
+      event.track.addEventListener('mute', () => {
+        console.warn(`[syncwatch] remote microphone track muted from ${username}`);
+        recordMediaDiagnostic('media.remote_track_state', { peerId, kind: 'audio', state: 'muted' });
+      });
+      startSpeakingMonitor(state);
       retryRemoteAudioPlayback(state, username);
       return;
     }
@@ -946,10 +1205,22 @@ function createPeerConnection(peerId, username = 'Guest') {
     }
   };
   pc.onconnectionstatechange = () => {
+    recordMediaDiagnostic('media.peer_state', {
+      peerId,
+      state: pc.connectionState,
+      iceState: pc.iceConnectionState,
+      signalingState: pc.signalingState,
+    });
     if (pc.connectionState === 'failed') {
       showToast(`Could not connect to ${username}'s camera or microphone. This network may require TURN.`);
     }
   };
+  pc.oniceconnectionstatechange = () => recordMediaDiagnostic('media.peer_state', {
+    peerId,
+    state: pc.connectionState,
+    iceState: pc.iceConnectionState,
+    signalingState: pc.signalingState,
+  });
   updatePeerCount();
   return state;
 }
@@ -1048,6 +1319,10 @@ function closePeer(peerId) {
     state.remoteAudio.pause();
     state.remoteAudio.srcObject = null;
   }
+  if (state?.speakingFrame) cancelAnimationFrame(state.speakingFrame);
+  if (state?.statsTimer) clearInterval(state.statsTimer);
+  state?.speakingSource?.disconnect();
+  if (state?.speakingAnalyser) state.speakingAnalyser.disconnect();
   state?.pc.close();
   peers.delete(peerId);
   displayNames.delete(peerId);
@@ -1077,6 +1352,18 @@ async function toggleDevice(kind) {
       });
       track = stream.getTracks().find((item) => item.kind === kind);
       if (!track) throw new Error(`No ${isVideo ? 'camera' : 'microphone'} was returned.`);
+      recordMediaDiagnostic('media.local_track_acquired', {
+        kind,
+        enabled: track.enabled,
+        muted: track.muted,
+        readyState: track.readyState,
+      });
+      track.addEventListener('mute', () => recordMediaDiagnostic('media.local_track_state', {
+        kind, state: 'muted', enabled: track.enabled, readyState: track.readyState,
+      }));
+      track.addEventListener('unmute', () => recordMediaDiagnostic('media.local_track_state', {
+        kind, state: 'unmuted', enabled: track.enabled, readyState: track.readyState,
+      }));
       localStream.addTrack(track);
       if (isVideo) {
         byId('local-camera').srcObject = localStream;
@@ -1094,16 +1381,40 @@ async function toggleDevice(kind) {
       if (!transceiver) continue;
       try {
         await transceiver.sender.replaceTrack(track);
-        transceiver.direction = 'sendrecv';
+        recordMediaDiagnostic('media.sender_track_attached', {
+          peerId: state.peerId,
+          kind,
+          state: 'attached',
+          enabled: track.enabled,
+          readyState: track.readyState,
+        });
       } catch (error) {
         track.enabled = false;
         showToast(`Could not share your ${isVideo ? 'camera' : 'microphone'}: ${error.message}`);
+        recordMediaDiagnostic('media.sender_track_attached', {
+          peerId: state.peerId,
+          kind,
+          state: 'failed',
+          errorName: error.name,
+          message: error.message,
+        });
         return;
       }
     }
   }
 
   const active = track.enabled;
+  if (!isVideo) {
+    if (active) startLocalMicrophoneMonitor(track);
+    else stopLocalMicrophoneMonitor();
+  }
+  recordMediaDiagnostic('media.local_track_state', {
+    kind,
+    state: active ? 'enabled' : 'disabled',
+    enabled: active,
+    muted: track.muted,
+    readyState: track.readyState,
+  });
   button.textContent = isVideo ? `Camera ${active ? 'on' : 'off'}` : `Mic ${active ? 'on' : 'off'}`;
   button.setAttribute('aria-label', `Turn ${active ? 'off' : 'on'} ${isVideo ? 'camera' : 'microphone'}`);
   button.setAttribute('aria-pressed', String(active));

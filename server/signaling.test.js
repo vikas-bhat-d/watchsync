@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { randomUUID } = require('node:crypto');
 const { once } = require('node:events');
 const test = require('node:test');
 const { io: createClient } = require('socket.io-client');
@@ -34,9 +35,9 @@ async function setup(t) {
   };
 }
 
-function join(client, roomId, username) {
+function join(client, roomId, username, participantId = randomUUID()) {
   return new Promise((resolve) => {
-    client.emit('join-room', { roomId, username }, resolve);
+    client.emit('join-room', { roomId, username, participantId }, resolve);
   });
 }
 
@@ -134,6 +135,42 @@ test('a disconnected host can rejoin with a new socket and recover room playback
   assert.equal(response.isHost, false);
   assert.equal(response.peers.length, 1);
   assert.deepEqual(response.playbackState, { seconds: 37, playing: true, speed: 1.25 });
+});
+
+test('a reconnecting process replaces its stale socket in a full room', async (t) => {
+  const { connect, server } = await setup(t);
+  const participantId = '11111111-1111-4111-8111-111111111111';
+  const host = await connect();
+  const guests = await Promise.all([connect(), connect(), connect()]);
+  await join(host, 'full-reconnect-room', 'Host', participantId);
+  for (const [index, guest] of guests.entries()) {
+    await join(guest, 'full-reconnect-room', `Guest ${index + 1}`);
+  }
+
+  const playbackEvent = once(guests[0], 'sync-event');
+  host.emit('sync-event', {
+    type: 'heartbeat',
+    payload: { seconds: 83, playing: true, speed: 1 },
+  });
+  await playbackEvent;
+
+  const peerLeft = once(guests[0], 'peer-left');
+  const hostChanged = once(guests[0], 'host-changed');
+  const peerJoined = once(guests[0], 'peer-joined');
+  const replacement = await connect();
+  const response = await join(replacement, 'full-reconnect-room', 'Host', participantId);
+
+  assert.equal(response.ok, true);
+  assert.equal(response.peers.length, 3);
+  assert.equal(response.isHost, true);
+  assert.equal(response.hostId, replacement.id);
+  assert.equal(server.rooms.get('full-reconnect-room').members.size, 4);
+  assert.equal(server.rooms.get('full-reconnect-room').hostId, replacement.id);
+  assert.deepEqual(response.playbackState, { seconds: 83, playing: true, speed: 1 });
+  assert.equal((await peerLeft)[0].id, host.id);
+  assert.equal((await hostChanged)[0].hostId, replacement.id);
+  assert.equal((await peerJoined)[0].id, replacement.id);
+  assert.equal(server.io.sockets.sockets.get(host.id).data.roomId, null);
 });
 
 test('chat messages are relayed with server-assigned identity and trimmed text', async (t) => {

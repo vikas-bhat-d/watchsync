@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('syncwatch', {
   setMpvViewport: (bounds) => ipcRenderer.invoke('mpv:set-viewport', bounds),
   getConfig: () => ipcRenderer.invoke('app:get-config'),
   saveUsername: (username) => ipcRenderer.invoke('app:save-username', username),
+  logMediaDiagnostic: (event, details) => ipcRenderer.invoke('media:log-diagnostic', event, details),
   connect: (serverUrl) => ipcRenderer.invoke('room:connect', serverUrl),
   joinRoom: (payload) => ipcRenderer.invoke('room:join', payload),
   leaveRoom: () => ipcRenderer.invoke('room:leave'),

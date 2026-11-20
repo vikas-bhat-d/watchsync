@@ -18,6 +18,12 @@ function normalizeRoomId(value) {
   return /^[a-z0-9][a-z0-9-]{2,31}$/.test(roomId) ? roomId : null;
 }
 
+function normalizeParticipantId(value) {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+    ? value.toLowerCase()
+    : null;
+}
+
 function normalizePlayback(type, value) {
   if (!value || typeof value !== 'object') {
     return null;
@@ -171,10 +177,11 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
     socket.on('join-room', (payload, acknowledge = () => {}) => {
       const roomId = normalizeRoomId(payload?.roomId);
       const username = normalizeText(payload?.username, 24);
-      if (!roomId || !username) {
+      const participantId = normalizeParticipantId(payload?.participantId);
+      if (!roomId || !username || !participantId) {
         writeLog(logger, 'warn', 'room.join_rejected', {
           socketId: socket.id,
-          reason: 'invalid_room_or_username',
+          reason: 'invalid_room_username_or_participant',
         });
         acknowledge({ ok: false, error: 'Enter a valid room code and display name.' });
         return;
@@ -182,6 +189,33 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
 
       leaveRoom(socket, 'switch_room');
       let room = rooms.get(roomId);
+
+      let replacedMember;
+      if (room) {
+        for (const [previousSocketId, member] of room.members) {
+          if (member.participantId !== participantId || previousSocketId === socket.id) continue;
+          replacedMember = { socketId: previousSocketId, ...member };
+          const previousSocket = io.sockets.sockets.get(previousSocketId);
+          if (previousSocket) {
+            previousSocket.data.roomId = null;
+            previousSocket.leave(roomId);
+          }
+          room.members.delete(previousSocketId);
+          io.to(roomId).emit('peer-left', {
+            id: previousSocketId,
+            username: member.username,
+          });
+          writeLog(logger, 'info', 'room.member_replaced', {
+            socketId: previousSocketId,
+            replacementSocketId: socket.id,
+            roomRef: room.logId.slice(0, 8),
+            memberCount: room.members.size,
+          });
+          break;
+        }
+      }
+
+      const replacingHost = replacedMember && room.hostId === replacedMember.socketId;
       if (room && room.members.size >= MAX_ROOM_SIZE) {
         writeLog(logger, 'warn', 'room.join_rejected', {
           socketId: socket.id,
@@ -205,11 +239,15 @@ function createSignalingServer({ host = '127.0.0.1', port = 3000, corsOrigin = '
       }
 
       const peers = [...room.members].map(([id, member]) => ({ id, username: member.username }));
-      room.members.set(socket.id, { username });
-      room.hostId ??= socket.id;
+      room.members.set(socket.id, { username, participantId });
+      if (replacingHost || !room.hostId) room.hostId = socket.id;
       socket.data.roomId = roomId;
       socket.data.username = username;
+      socket.data.participantId = participantId;
       socket.join(roomId);
+      if (replacingHost) {
+        io.to(roomId).emit('host-changed', { hostId: socket.id });
+      }
       writeLog(logger, 'info', 'room.member_joined', {
         socketId: socket.id,
         roomRef: room.logId.slice(0, 8),

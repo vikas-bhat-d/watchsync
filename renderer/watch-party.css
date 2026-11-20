@@ -829,6 +829,11 @@ h2 {
   background: #0e1712;
 }
 
+.video-tile.is-speaking {
+  border-color: var(--green);
+  box-shadow: 0 0 0 1px rgba(75, 209, 162, 0.6), 0 0 18px rgba(75, 209, 162, 0.28);
+}
+
 .video-tile video {
   position: absolute;
   inset: 0;
@@ -875,6 +880,12 @@ h2 {
   font-size: 9px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.video-tile.is-speaking .video-name::after {
+  color: #74e6bd;
+  content: "  ·  Speaking";
+  font-weight: 700;
 }
 
 .video-empty {
