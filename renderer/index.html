@@ -119,6 +119,17 @@
           </section>
         </section>
 
+        <div
+          class="panel-resizer"
+          id="panel-resizer"
+          role="separator"
+          aria-label="Resize room panel"
+          aria-orientation="vertical"
+          aria-valuemin="280"
+          aria-valuemax="520"
+          aria-valuenow="340"
+          tabindex="0"
+        ></div>
         <aside class="side-panel" aria-label="Watch party">
           <nav class="quick-rail" aria-label="Quick actions">
             <span class="rail-avatar" id="rail-avatar" aria-label="Not in a room">SW</span>
@@ -156,7 +167,13 @@
             <section class="webcam-panel" aria-labelledby="webcam-heading">
               <div class="section-heading compact-heading">
                 <div><p class="eyebrow">CAMERAS</p><h2 id="webcam-heading">Live video <span id="participant-count">0/4</span></h2></div>
-                <button class="icon-button pip-button" id="pip-webcam" type="button" title="Picture in picture" aria-label="Picture in picture">↗</button>
+                <div class="webcam-actions">
+                  <div class="device-actions" role="group" aria-label="Camera and microphone controls">
+                    <button class="device-button" id="toggle-microphone" type="button" disabled title="Toggle microphone" aria-label="Toggle microphone" aria-pressed="false">Mic off</button>
+                    <button class="device-button" id="toggle-camera" type="button" disabled title="Toggle camera" aria-label="Toggle camera" aria-pressed="false">Cam off</button>
+                  </div>
+                  <button class="icon-button pip-button" id="pip-webcam" type="button" title="Picture in picture" aria-label="Picture in picture">↗</button>
+                </div>
               </div>
               <div class="webcam-grid" id="webcam-grid">
                 <div class="video-tile local-tile" id="local-tile">
@@ -165,10 +182,6 @@
                   <span class="video-name" id="local-name">You</span>
                 </div>
                 <div class="video-empty" id="remote-empty">Waiting for someone to join</div>
-              </div>
-              <div class="device-actions">
-                <button class="device-button" id="toggle-microphone" type="button" disabled title="Toggle microphone">Mic off</button>
-                <button class="device-button" id="toggle-camera" type="button" disabled title="Toggle camera">Camera off</button>
               </div>
             </section>
 

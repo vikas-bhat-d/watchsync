@@ -28,6 +28,7 @@ app.setPath('sessionData', sessionDataPath);
 let signalingSocket;
 let localSignalingServer;
 let signalingServerUrl;
+let signalingServerMode = 'local';
 let mpvBridge;
 let activeEngine = 'browser';
 let userPreferences;
@@ -98,6 +99,7 @@ async function startLocalSignalingServer() {
   });
   if (configuredUrl) {
     signalingServerUrl = configuredUrl;
+    signalingServerMode = 'remote';
     console.info('[syncwatch] Using signaling server:', signalingServerUrl);
     return;
   }
@@ -109,6 +111,7 @@ async function startLocalSignalingServer() {
     await server.listen();
     localSignalingServer = server;
     signalingServerUrl = url;
+    signalingServerMode = 'local';
     console.info('[syncwatch] Using local signaling server:', signalingServerUrl);
   } catch (error) {
     if (error.code !== 'EADDRINUSE') throw error;
@@ -118,6 +121,7 @@ async function startLocalSignalingServer() {
       const health = await response.json();
       if (response.ok && health.status === 'ok') {
         signalingServerUrl = url;
+        signalingServerMode = 'local';
         return;
       }
     } catch {
@@ -144,6 +148,7 @@ function createWindow() {
     },
   });
 
+  window.maximize();
   window.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   window.on('closed', () => {
     const host = videoHosts.get(window.id);
@@ -244,6 +249,7 @@ ipcMain.handle('app:get-config', async () => {
   const preferences = await getUserPreferences().load();
   return {
     signalingServerUrl,
+    signalingServerMode,
     mpvPath: process.env.MPV_PATH ?? null,
     username: preferences.username,
     iceServers: [

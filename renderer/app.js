@@ -8,6 +8,8 @@ const subtitleTrackSelect = byId('subtitle-track');
 const aspectRatioSelect = byId('aspect-ratio');
 const playerColumn = document.querySelector('.player-column');
 const playerFrame = byId('player-frame');
+const workspace = byId('workspace');
+const panelResizer = byId('panel-resizer');
 const roomCodeInput = byId('room-code');
 const usernameInput = byId('username');
 const chatMessages = byId('chat-messages');
@@ -29,6 +31,9 @@ let roomState = null;
 let roomRestoreInProgress = false;
 let playerEngine = 'browser';
 let signalingServerUrl = 'http://127.0.0.1:3000';
+let signalingServerMode = 'local';
+let signalingConfigReady = Promise.resolve();
+let signalingConfigError = null;
 let iceServers = [{ urls: 'stun:stun.cloudflare.com:3478' }];
 let hostHeartbeatTimer;
 let driftCheckTimer;
@@ -37,6 +42,7 @@ let controlsHideTimer;
 let mpvViewportFrame = 0;
 let lastPositionSaveAt = 0;
 let pendingBrowserResumePosition = 0;
+let resizingPanel = false;
 let unreadMessages = 0;
 let lastHostState = null;
 const subtitleBlobUrls = [];
@@ -72,6 +78,27 @@ function setRoomMessage(message, isError = false) {
 function setConnectionLabel(message, state = 'idle') {
   byId('connection-label').textContent = message;
   byId('connection-state').dataset.state = state;
+}
+
+function setSidePanelWidth(width) {
+  const maxWidth = Math.max(280, Math.min(520, (workspace.clientWidth - 60) * 0.52));
+  const clampedWidth = Math.round(Math.max(280, Math.min(maxWidth, width)));
+  workspace.style.setProperty('--side-panel-width', `${clampedWidth}px`);
+  panelResizer.setAttribute('aria-valuenow', String(clampedWidth));
+}
+
+function updateSidePanelWidthFromPointer(clientX) {
+  const bounds = workspace.getBoundingClientRect();
+  const styles = getComputedStyle(workspace);
+  const paddingRight = Number.parseFloat(styles.paddingRight) || 0;
+  const columnGap = Number.parseFloat(styles.columnGap) || 0;
+  const panelWidth = bounds.right - clientX - paddingRight - panelResizer.clientWidth / 2 - columnGap;
+  setSidePanelWidth(panelWidth);
+}
+
+function persistSidePanelWidth() {
+  const width = Number.parseFloat(getComputedStyle(workspace).getPropertyValue('--side-panel-width'));
+  if (Number.isFinite(width)) localStorage.setItem('syncwatch-side-panel-width', String(width));
 }
 
 function canControlPlayback() {
@@ -562,6 +589,8 @@ async function joinRoom(roomId) {
 
   setRoomMessage('Connecting to the watch room...');
   try {
+    await signalingConfigReady;
+    if (signalingConfigError) throw signalingConfigError;
     await saveUsernamePreference(username);
     const connection = await window.syncwatch.connect(signalingServerUrl);
     const response = await window.syncwatch.joinRoom({ roomId, username });
@@ -590,8 +619,18 @@ async function joinRoom(roomId) {
       lastHostState = { ...response.playbackState, receivedAt: Date.now() };
       if (video.currentSrc) applyHostEvent('force-sync', response.playbackState);
     }
-    setConnectionLabel('Connected to room', 'connected');
-    setRoomMessage(roomState.isHost ? 'You are hosting. Share the room code.' : 'Room joined. Open your copy of the same video.');
+    if (signalingServerMode === 'local') {
+      setConnectionLabel('Local room only', 'error');
+      setRoomMessage(
+        roomState.isHost
+          ? 'You are hosting a local-only room. Other computers cannot join.'
+          : 'Joined a local-only room on this computer.',
+        true,
+      );
+    } else {
+      setConnectionLabel('Connected to room', 'connected');
+      setRoomMessage(roomState.isHost ? 'You are hosting. Share the room code.' : 'Room joined. Open your copy of the same video.');
+    }
     byId('chat-messages').replaceChildren();
     unreadMessages = 0;
     updateUnreadBadge();
@@ -788,6 +827,8 @@ function createPeerConnection(peerId, username = 'Guest') {
   });
   const state = {
     pc,
+    remoteAudio: null,
+    remoteAudioStream: new MediaStream(),
     polite: roomState.socketId.localeCompare(peerId) > 0,
     makingOffer: false,
     ignoreOffer: false,
@@ -804,8 +845,27 @@ function createPeerConnection(peerId, username = 'Guest') {
     if (candidate) window.syncwatch.emit('webrtc-ice', { to: peerId, candidate: candidate.toJSON() });
   };
   pc.ontrack = (event) => {
-    const stream = event.streams[0] ?? new MediaStream([event.track]);
-    attachRemoteStream(peerId, username, stream);
+    if (event.track.kind === 'audio') {
+      if (!state.remoteAudio) {
+        const audio = document.createElement('audio');
+        audio.className = 'remote-audio-output';
+        audio.autoplay = true;
+        audio.playsInline = true;
+        audio.setAttribute('aria-label', `${username} microphone`);
+        ensureRemoteTile(peerId, username).append(audio);
+        state.remoteAudio = audio;
+      }
+      if (!state.remoteAudioStream.getTracks().some((track) => track.id === event.track.id)) {
+        state.remoteAudioStream.addTrack(event.track);
+      }
+      state.remoteAudio.srcObject = state.remoteAudioStream;
+      state.remoteAudio.play().catch((error) => {
+        showToast(`Could not play ${username}'s microphone audio: ${error.message}`);
+      });
+      return;
+    }
+
+    attachRemoteStream(peerId, username, new MediaStream([event.track]));
   };
   pc.onnegotiationneeded = async () => {
     try {
@@ -916,6 +976,7 @@ async function receiveIce({ from, candidate }) {
 
 function closePeer(peerId) {
   const state = peers.get(peerId);
+  if (state?.remoteAudio) state.remoteAudio.srcObject = null;
   state?.pc.close();
   peers.delete(peerId);
   displayNames.delete(peerId);
@@ -959,6 +1020,9 @@ async function toggleDevice(kind) {
 
   const active = track.enabled;
   button.textContent = isVideo ? `Camera ${active ? 'on' : 'off'}` : `Mic ${active ? 'on' : 'off'}`;
+  button.setAttribute('aria-label', `Turn ${active ? 'off' : 'on'} ${isVideo ? 'camera' : 'microphone'}`);
+  button.setAttribute('aria-pressed', String(active));
+  button.title = `${isVideo ? 'Camera' : 'Microphone'} ${active ? 'on' : 'off'}`;
   button.classList.toggle('is-active', active);
   if (isVideo) {
     byId('local-tile').classList.toggle('has-camera', active);
@@ -1281,18 +1345,51 @@ video.addEventListener('error', () => {
   byId('media-error').hidden = false;
 });
 
+panelResizer.addEventListener('pointerdown', (event) => {
+  if (document.body.dataset.mode === 'theater') return;
+  event.preventDefault();
+  resizingPanel = true;
+  workspace.classList.add('is-resizing');
+  panelResizer.setPointerCapture(event.pointerId);
+  updateSidePanelWidthFromPointer(event.clientX);
+});
+panelResizer.addEventListener('pointermove', (event) => {
+  if (resizingPanel) updateSidePanelWidthFromPointer(event.clientX);
+});
+const stopPanelResize = () => {
+  if (!resizingPanel) return;
+  resizingPanel = false;
+  workspace.classList.remove('is-resizing');
+  persistSidePanelWidth();
+};
+panelResizer.addEventListener('pointerup', stopPanelResize);
+panelResizer.addEventListener('pointercancel', stopPanelResize);
+panelResizer.addEventListener('keydown', (event) => {
+  const currentWidth = Number.parseFloat(getComputedStyle(workspace).getPropertyValue('--side-panel-width')) || 340;
+  if (event.key === 'ArrowLeft') setSidePanelWidth(currentWidth - 20);
+  else if (event.key === 'ArrowRight') setSidePanelWidth(currentWidth + 20);
+  else if (event.key === 'Home') setSidePanelWidth(280);
+  else if (event.key === 'End') setSidePanelWidth(520);
+  else return;
+  event.preventDefault();
+  persistSidePanelWidth();
+});
+
 window.syncwatch.onRoomEvent(handleRoomEvent);
 window.syncwatch.onMpvEvent(handleMpvEvent);
 const legacyUsername = localStorage.getItem('syncwatch-username') ?? '';
-window.syncwatch.getConfig().then((config) => {
+signalingConfigReady = window.syncwatch.getConfig().then((config) => {
   signalingServerUrl = config.signalingServerUrl;
+  signalingServerMode = config.signalingServerMode ?? 'local';
   iceServers = config.iceServers ?? iceServers;
   if (!usernameInput.value.trim()) {
     usernameInput.value = config.username || legacyUsername;
   }
   if (legacyUsername) localStorage.removeItem('syncwatch-username');
   void saveUsernamePreference();
-}).catch(() => {});
+}).catch((error) => {
+  signalingConfigError = error;
+});
 updateRoomUi();
 updateTime();
 updateMuteButton();
@@ -1307,6 +1404,12 @@ playerColumn.addEventListener('focusout', (event) => {
 
 new ResizeObserver(queueMpvViewportUpdate).observe(playerFrame);
 window.addEventListener('resize', queueMpvViewportUpdate);
+const savedSidePanelWidth = Number(localStorage.getItem('syncwatch-side-panel-width'));
+if (Number.isFinite(savedSidePanelWidth) && savedSidePanelWidth > 0) setSidePanelWidth(savedSidePanelWidth);
+window.addEventListener('resize', () => {
+  const currentWidth = Number.parseFloat(getComputedStyle(workspace).getPropertyValue('--side-panel-width')) || 340;
+  setSidePanelWidth(currentWidth);
+});
 
 function showPlaybackControls() {
   if (document.body.dataset.mode !== 'theater') return;
