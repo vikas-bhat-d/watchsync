@@ -6,7 +6,7 @@ const { pathToFileURL } = require('node:url');
 const { app, BrowserWindow, dialog, ipcMain, screen, session } = require('electron');
 const { io } = require('socket.io-client');
 const { createSignalingServer } = require('../server/signaling');
-const { getSignalingServerUrl } = require('./config');
+const { resolveSignalingServerUrl } = require('./config');
 const { MpvBridge } = require('./mpv-bridge');
 const { createUserPreferences } = require('./user-preferences');
 const { Win32VideoHost } = require('./win32-video-host');
@@ -91,9 +91,14 @@ function getMpvBridge(windowId = null) {
 }
 
 async function startLocalSignalingServer() {
-  const configuredUrl = getSignalingServerUrl();
+  const configuredUrl = await resolveSignalingServerUrl({
+    onRemoteConfigError: (error) => {
+      console.warn('[syncwatch] Remote server config unavailable; using fallback:', error.message);
+    },
+  });
   if (configuredUrl) {
     signalingServerUrl = configuredUrl;
+    console.info('[syncwatch] Using signaling server:', signalingServerUrl);
     return;
   }
 
@@ -104,6 +109,7 @@ async function startLocalSignalingServer() {
     await server.listen();
     localSignalingServer = server;
     signalingServerUrl = url;
+    console.info('[syncwatch] Using local signaling server:', signalingServerUrl);
   } catch (error) {
     if (error.code !== 'EADDRINUSE') throw error;
 

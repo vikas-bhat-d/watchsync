@@ -1,3 +1,6 @@
+const DEFAULT_SERVER_URL_CONFIG = 'https://raw.githubusercontent.com/vikas-bhat-d/watchsync/main/serverurl.txt';
+const SERVER_URL_CONFIG_TIMEOUT_MS = 4000;
+
 function readCommandLineServerUrl(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -51,4 +54,49 @@ function getSignalingServerUrl(argv = process.argv, env = process.env) {
   return null;
 }
 
-module.exports = { getSignalingServerUrl };
+async function resolveSignalingServerUrl({
+  argv = process.argv,
+  env = process.env,
+  fetchImpl = globalThis.fetch,
+  configUrl = DEFAULT_SERVER_URL_CONFIG,
+  timeoutMs = SERVER_URL_CONFIG_TIMEOUT_MS,
+  onRemoteConfigError = () => {},
+} = {}) {
+  const commandLineUrl = readCommandLineServerUrl(argv);
+  if (commandLineUrl !== null) {
+    return validateServerUrl(commandLineUrl, '--server-url');
+  }
+
+  if (typeof fetchImpl === 'function') {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    timeout.unref?.();
+    try {
+      const response = await fetchImpl(configUrl, {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        onRemoteConfigError(new Error(`Remote server config returned HTTP ${response.status}.`));
+      } else {
+        const remoteUrl = (await response.text()).trim();
+        if (remoteUrl) {
+          try {
+            return validateServerUrl(remoteUrl, 'Remote server URL');
+          } catch (error) {
+            onRemoteConfigError(error);
+          }
+        }
+      }
+    } catch (error) {
+      onRemoteConfigError(error);
+      // Offline or unavailable remote configuration falls back to local configuration.
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  return getSignalingServerUrl(argv, env);
+}
+
+module.exports = { getSignalingServerUrl, resolveSignalingServerUrl };

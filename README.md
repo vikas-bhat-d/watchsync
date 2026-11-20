@@ -57,7 +57,7 @@ The unpacked executable is in the same build directory under `win-unpacked`. The
 
 ## Configure the Signaling Server
 
-With no URL configured, the app starts or reuses its local server at `http://127.0.0.1:3000`. To select another server, pass `--server-url`. This overrides `SYNCWATCH_SERVER_URL` and disables the embedded local server.
+At startup, the app first uses `--server-url` when provided. Otherwise, it fetches the public `serverurl.txt` at `https://raw.githubusercontent.com/vikas-bhat-d/watchsync/main/serverurl.txt`. If that file cannot be fetched or contains an invalid URL, the app falls back to `SYNCWATCH_SERVER_URL`; if that is also unset, it starts or reuses its local server at `http://127.0.0.1:3000`. A selected remote server disables the embedded local server.
 
 For a source run:
 
@@ -122,7 +122,8 @@ Keep TURN credentials private. Room codes are the only access check currently; u
 | Variable | Purpose | Default |
 |---|---|---|
 | `--server-url URL` | Signaling URL used by the desktop app; takes precedence over the environment variable and skips its embedded server | Embedded local server |
-| `SYNCWATCH_SERVER_URL` | Fallback signaling URL for scripts or launchers that do not pass `--server-url` | Unset |
+| `serverurl.txt` | Public raw GitHub text file containing the default signaling URL; checked after `--server-url` and before environment/local fallback | Not available |
+| `SYNCWATCH_SERVER_URL` | Fallback signaling URL when the remote server file is unavailable | Unset |
 | `SYNCWATCH_SERVER_PORT` | Port for the embedded server, or fallback port for standalone server | `3000` |
 | `SYNCWATCH_BIND_HOST` | Bind address for `npm run server` | `127.0.0.1` |
 | `PORT` | Standalone server port; overrides `SYNCWATCH_SERVER_PORT` | Unset |
