@@ -38,6 +38,7 @@ let iceServers = [{ urls: 'stun:stun.cloudflare.com:3478' }];
 let hostHeartbeatTimer;
 let driftCheckTimer;
 let toastTimer;
+let theaterMessageTimer;
 let controlsHideTimer;
 let mpvViewportFrame = 0;
 let lastPositionSaveAt = 0;
@@ -766,7 +767,22 @@ function appendChatMessage(message) {
   if (message.senderId !== roomState?.socketId && document.body.dataset.mode === 'theater') {
     unreadMessages += 1;
     updateUnreadBadge();
+    showTheaterChatMessage(message);
   }
+}
+
+function showTheaterChatMessage(message) {
+  const toast = byId('theater-message-toast');
+  byId('theater-message-sender').textContent = message.username;
+  byId('theater-message-text').textContent = message.text;
+  toast.classList.remove('is-visible');
+  toast.hidden = false;
+  requestAnimationFrame(() => toast.classList.add('is-visible'));
+  clearTimeout(theaterMessageTimer);
+  theaterMessageTimer = setTimeout(() => {
+    toast.classList.remove('is-visible');
+    setTimeout(() => { toast.hidden = true; }, 240);
+  }, 4200);
 }
 
 function updateUnreadBadge() {
@@ -819,16 +835,51 @@ function showFloatingReaction(emoji, senderId) {
   reaction.addEventListener('animationend', () => reaction.remove(), { once: true });
 }
 
+function retryRemoteAudioPlayback(state, username) {
+  const audio = state.remoteAudio;
+  if (!audio?.srcObject) return;
+  audio.muted = false;
+  audio.volume = 1;
+  audio.play().then(() => {
+    if (!state.audioRetryHandler) return;
+    document.removeEventListener('pointerdown', state.audioRetryHandler);
+    document.removeEventListener('keydown', state.audioRetryHandler);
+    state.audioRetryHandler = null;
+    state.audioPlaybackNoticeShown = false;
+  }).catch((error) => {
+    if (error.name === 'NotAllowedError') {
+      if (!state.audioRetryHandler) {
+        state.audioRetryHandler = () => retryRemoteAudioPlayback(state, username);
+        document.addEventListener('pointerdown', state.audioRetryHandler);
+        document.addEventListener('keydown', state.audioRetryHandler);
+      }
+      if (!state.audioPlaybackNoticeShown) {
+        state.audioPlaybackNoticeShown = true;
+        showToast(`Click in SyncWatch to enable ${username}'s microphone audio.`);
+      }
+      return;
+    }
+    showToast(`Could not play ${username}'s microphone audio: ${error.message}`);
+  });
+}
+
 function createPeerConnection(peerId, username = 'Guest') {
   if (peers.has(peerId) || !roomState) return peers.get(peerId);
   ensureRemoteTile(peerId, username);
   const pc = new RTCPeerConnection({
     iceServers,
   });
+  const transceivers = {
+    audio: pc.addTransceiver('audio', { direction: 'recvonly' }),
+    video: pc.addTransceiver('video', { direction: 'recvonly' }),
+  };
   const state = {
     pc,
+    transceivers,
     remoteAudio: null,
     remoteAudioStream: new MediaStream(),
+    audioRetryHandler: null,
+    audioPlaybackNoticeShown: false,
     polite: roomState.socketId.localeCompare(peerId) > 0,
     makingOffer: false,
     ignoreOffer: false,
@@ -838,7 +889,13 @@ function createPeerConnection(peerId, username = 'Guest') {
   peers.set(peerId, state);
   displayNames.set(peerId, username);
   for (const track of localStream.getTracks()) {
-    if (track.readyState === 'live') pc.addTrack(track, localStream);
+    const transceiver = transceivers[track.kind];
+    if (track.readyState !== 'live' || !transceiver) continue;
+    transceiver.sender.replaceTrack(track).then(() => {
+      transceiver.direction = 'sendrecv';
+    }).catch((error) => {
+      showToast(`Could not attach ${track.kind} track for ${username}: ${error.message}`);
+    });
   }
 
   pc.onicecandidate = ({ candidate }) => {
@@ -851,6 +908,8 @@ function createPeerConnection(peerId, username = 'Guest') {
         audio.className = 'remote-audio-output';
         audio.autoplay = true;
         audio.playsInline = true;
+        audio.muted = false;
+        audio.volume = 1;
         audio.setAttribute('aria-label', `${username} microphone`);
         ensureRemoteTile(peerId, username).append(audio);
         state.remoteAudio = audio;
@@ -859,9 +918,12 @@ function createPeerConnection(peerId, username = 'Guest') {
         state.remoteAudioStream.addTrack(event.track);
       }
       state.remoteAudio.srcObject = state.remoteAudioStream;
-      state.remoteAudio.play().catch((error) => {
-        showToast(`Could not play ${username}'s microphone audio: ${error.message}`);
-      });
+      event.track.addEventListener('unmute', () => retryRemoteAudioPlayback(state, username), { once: true });
+      event.track.addEventListener('unmute', () => {
+        console.info(`[syncwatch] received active microphone track from ${username}`);
+        showToast(`Microphone audio connected from ${username}.`);
+      }, { once: true });
+      retryRemoteAudioPlayback(state, username);
       return;
     }
 
@@ -884,7 +946,9 @@ function createPeerConnection(peerId, username = 'Guest') {
     }
   };
   pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'failed') showToast(`Could not connect to ${username}'s camera.`);
+    if (pc.connectionState === 'failed') {
+      showToast(`Could not connect to ${username}'s camera or microphone. This network may require TURN.`);
+    }
   };
   updatePeerCount();
   return state;
@@ -976,7 +1040,14 @@ async function receiveIce({ from, candidate }) {
 
 function closePeer(peerId) {
   const state = peers.get(peerId);
-  if (state?.remoteAudio) state.remoteAudio.srcObject = null;
+  if (state?.audioRetryHandler) {
+    document.removeEventListener('pointerdown', state.audioRetryHandler);
+    document.removeEventListener('keydown', state.audioRetryHandler);
+  }
+  if (state?.remoteAudio) {
+    state.remoteAudio.pause();
+    state.remoteAudio.srcObject = null;
+  }
   state?.pc.close();
   peers.delete(peerId);
   displayNames.delete(peerId);
@@ -1007,7 +1078,6 @@ async function toggleDevice(kind) {
       track = stream.getTracks().find((item) => item.kind === kind);
       if (!track) throw new Error(`No ${isVideo ? 'camera' : 'microphone'} was returned.`);
       localStream.addTrack(track);
-      for (const { pc } of peers.values()) pc.addTrack(track, localStream);
       if (isVideo) {
         byId('local-camera').srcObject = localStream;
         await byId('local-camera').play().catch(() => {});
@@ -1015,6 +1085,21 @@ async function toggleDevice(kind) {
     } catch (error) {
       showToast(`Could not start ${isVideo ? 'camera' : 'microphone'}: ${error.message}`);
       return;
+    }
+  }
+
+  if (track.enabled) {
+    for (const state of peers.values()) {
+      const transceiver = state.transceivers[kind];
+      if (!transceiver) continue;
+      try {
+        await transceiver.sender.replaceTrack(track);
+        transceiver.direction = 'sendrecv';
+      } catch (error) {
+        track.enabled = false;
+        showToast(`Could not share your ${isVideo ? 'camera' : 'microphone'}: ${error.message}`);
+        return;
+      }
     }
   }
 

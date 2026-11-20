@@ -77,7 +77,7 @@ input:disabled {
   display: grid;
   width: 100%;
   height: 100%;
-  grid-template-rows: 58px minmax(0, 1fr);
+  grid-template-rows: 48px minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -228,8 +228,8 @@ input:disabled {
   display: grid;
   min-width: 0;
   min-height: 0;
-  grid-template-rows: 46px minmax(0, 1fr) auto;
-  gap: 12px;
+  grid-template-rows: 32px minmax(0, 1fr) auto;
+  gap: 8px;
 }
 
 .media-heading {
@@ -237,11 +237,24 @@ input:disabled {
   min-width: 0;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 10px;
 }
 
 .media-copy {
   min-width: 0;
+}
+
+.media-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+#open-video {
+  min-height: 30px;
+  padding-right: 10px;
+  padding-left: 10px;
 }
 
 .media-kicker {
@@ -362,17 +375,17 @@ h2 {
   display: flex;
   align-items: center;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   max-width: 400px;
-  padding: 20px;
+  padding: 14px;
   text-align: center;
 }
 
 .empty-mark {
-  width: 42px;
-  margin-bottom: 3px;
-  border-radius: 12px;
-  font-size: 12px;
+  width: 34px;
+  margin-bottom: 0;
+  border-radius: 9px;
+  font-size: 10px;
 }
 
 .mpv-status {
@@ -411,6 +424,49 @@ h2 {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.theater-message-toast {
+  position: absolute;
+  z-index: 15;
+  bottom: 46px;
+  left: 20px;
+  display: grid;
+  width: min(460px, calc(100% - 40px));
+  gap: 4px;
+  padding: 11px 14px;
+  border: 1px solid rgba(75, 209, 162, 0.32);
+  border-radius: 7px;
+  background: rgba(18, 22, 19, 0.94);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.42);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-14px);
+  transition: opacity 180ms ease, transform 220ms ease;
+}
+
+.theater-message-toast.is-visible {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.theater-message-sender {
+  overflow: hidden;
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.theater-message-text {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .media-error {
@@ -583,7 +639,13 @@ h2 {
   outline: 0;
   background: transparent;
   color: var(--text);
+  color-scheme: dark;
   font-size: 11px;
+}
+
+.control-select select option {
+  background: #20231e;
+  color: #eff1e9;
 }
 
 .volume-control {
@@ -1118,7 +1180,7 @@ body[data-mode="theater"] .quick-rail .rail-button {
 
 @media (max-height: 680px) {
   .app-shell {
-    grid-template-rows: 52px minmax(0, 1fr);
+    grid-template-rows: 44px minmax(0, 1fr);
   }
 
   .workspace {
@@ -1128,8 +1190,8 @@ body[data-mode="theater"] .quick-rail .rail-button {
   }
 
   .player-column {
-    grid-template-rows: 40px minmax(0, 1fr) auto;
-    gap: 8px;
+    grid-template-rows: 30px minmax(0, 1fr) auto;
+    gap: 6px;
   }
 
   .panel-content {

@@ -140,6 +140,7 @@ function createWindow() {
     minHeight: 560,
     backgroundColor: '#11130f',
     title: 'SyncWatch',
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

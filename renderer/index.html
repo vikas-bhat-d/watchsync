@@ -32,11 +32,10 @@
         <section class="player-column" aria-label="Video player">
           <div class="media-heading">
             <div class="media-copy">
-              <div class="media-kicker">
-                <p class="eyebrow">NOW PLAYING</p>
+              <div class="media-title-row">
+                <h1 id="media-title">No video open</h1>
                 <span class="room-pill" id="room-pill" hidden></span>
               </div>
-              <h1 id="media-title">Choose a local video to begin</h1>
             </div>
             <button class="button button-secondary" id="open-video" type="button" title="Open a local video">
               <span aria-hidden="true">＋</span> Open file
@@ -57,6 +56,10 @@
               <button class="button button-primary" id="open-empty" type="button">Choose video</button>
             </div>
             <p class="media-error" id="media-error" role="alert" hidden></p>
+            <div class="theater-message-toast" id="theater-message-toast" role="status" aria-live="polite" hidden>
+              <span class="theater-message-sender" id="theater-message-sender"></span>
+              <span class="theater-message-text" id="theater-message-text"></span>
+            </div>
             <div class="reaction-layer" id="reaction-layer" aria-live="off"></div>
             <div class="player-status" id="playback-status">Ready when you are</div>
           </div>
@@ -91,7 +94,7 @@
                 <button class="button button-secondary subtitle-load" id="load-subtitles" type="button" title="Load an SRT or WebVTT subtitle file">CC +</button>
                 <label class="control-select media-select" title="Video aspect ratio">
                   <select id="aspect-ratio" aria-label="Video aspect ratio">
-                    <option value="auto">Auto</option>
+                    <option value="auto">Fit</option>
                     <option value="1.7777778">16:9</option>
                     <option value="1.3333333">4:3</option>
                     <option value="2.35">2.35:1</option>
